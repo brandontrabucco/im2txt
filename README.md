@@ -1,3 +1,7 @@
+### Preface
+
+This repository is a modified version of the Show and Tell paper mentioned below, where we investigate various extensions and modifications that enable the model to behave in new and unique ways. Nothing too specific yet.
+
 # Show and Tell: A Neural Image Caption Generator
 
 A TensorFlow implementation of the image-to-text model described in the paper:
@@ -12,9 +16,11 @@ Oriol Vinyals, Alexander Toshev, Samy Bengio, Dumitru Erhan.
 Full text available at: http://arxiv.org/abs/1609.06647
 
 ## Contact
-***Author:*** Chris Shallue
+***Original Author:*** Chris Shallue
 
-***Pull requests and issues:*** @cshallue
+***Extensions Author:*** Brandon Trabucco
+
+***Pull requests and issues:*** @brandontrabucco
 
 ## Contents
 * [Model Overview](#model-overview)
