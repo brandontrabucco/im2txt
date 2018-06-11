@@ -78,9 +78,15 @@ download_and_unzip ${BASE_CAPTIONS_URL} ${CAPTIONS_FILE}
 TRAIN_CAPTIONS_FILE="${SCRATCH_DIR}/annotations/captions_train2014.json"
 VAL_CAPTIONS_FILE="${SCRATCH_DIR}/annotations/captions_val2014.json"
 
+echo "${TRAIN_IMAGE_DIR}"
+echo "${VAL_IMAGE_DIR}"
+echo "${TRAIN_CAPTIONS_FILE}"
+echo "${VAL_CAPTIONS_FILE}"
+echo "${OUTPUT_DIR}"
+
 # Build TFRecords of the image data.
 cd "${CURRENT_DIR}"
-BUILD_SCRIPT="${WORK_DIR}/build_mscoco_data"
+BUILD_SCRIPT="python3 /home/btrabucco/research/im2txt/im2txt/data/build_mscoco_data.py"
 "${BUILD_SCRIPT}" \
   --train_image_dir="${TRAIN_IMAGE_DIR}" \
   --val_image_dir="${VAL_IMAGE_DIR}" \
@@ -88,3 +94,11 @@ BUILD_SCRIPT="${WORK_DIR}/build_mscoco_data"
   --val_captions_file="${VAL_CAPTIONS_FILE}" \
   --output_dir="${OUTPUT_DIR}" \
   --word_counts_output_file="${OUTPUT_DIR}/word_counts.txt" \
+  
+python3 build_mscoco_data.py \
+  --train_image_dir="./coco/raw-data/train2014" \
+  --val_image_dir="./coco/raw-data/val2014" \
+  --train_captions_file="./coco/raw-data/annotations/captions_train2014.json" \
+  --val_captions_file="./coco/raw-data/annotations/captions_val2014.json" \
+  --output_dir="./coco" \
+  --word_counts_output_file="./coco/word_counts.txt" \
