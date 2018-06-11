@@ -466,9 +466,14 @@ def main(unused_argv):
   #   test_dataset = 10% of mscoco_val_dataset (for final evaluation).
   train_cutoff = int(0.85 * len(mscoco_val_dataset))
   val_cutoff = int(0.90 * len(mscoco_val_dataset))
-  train_dataset = mscoco_train_dataset + mscoco_val_dataset[0:train_cutoff]
-  val_dataset = mscoco_val_dataset[train_cutoff:val_cutoff]
-  test_dataset = mscoco_val_dataset[val_cutoff:]
+
+  #train_dataset = mscoco_train_dataset + mscoco_val_dataset[0:train_cutoff]
+  #val_dataset = mscoco_val_dataset[train_cutoff:val_cutoff]
+  #test_dataset = mscoco_val_dataset[val_cutoff:]
+    
+  train_dataset = mscoco_train_dataset[:100]
+  val_dataset = mscoco_val_dataset[0:20]
+  test_dataset = mscoco_val_dataset[20:40]
 
   # Create vocabulary from the training captions.
   train_captions = [c for image in train_dataset for c in image.captions]
