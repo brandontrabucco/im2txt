@@ -7,5 +7,5 @@ setup(name='im2txt',
       author='Brandon Trabucco',
       author_email='brandon@btrabucco.com',
       license='MIT',
-      packages=['im2txt'],
+      packages=['im2txt', 'im2txt.inference_utils', 'im2txt.ops'],
       zip_safe=False)
