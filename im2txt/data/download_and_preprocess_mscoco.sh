@@ -95,7 +95,7 @@ BUILD_SCRIPT="python3 /home/btrabucco/research/im2txt/im2txt/data/build_mscoco_d
   --output_dir="${OUTPUT_DIR}" \
   --word_counts_output_file="${OUTPUT_DIR}/word_counts.txt" \
   
-python3 build_mscoco_data.py \
+python2 build_mscoco_data.py \
   --train_image_dir="./coco/raw-data/train2014" \
   --val_image_dir="./coco/raw-data/val2014" \
   --train_captions_file="./coco/raw-data/annotations/captions_train2014.json" \

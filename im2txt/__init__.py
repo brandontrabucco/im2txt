@@ -29,8 +29,8 @@ from im2txt import inference_wrapper
 from im2txt.inference_utils import caption_generator
 from im2txt.inference_utils import vocabulary
 
-CHECKPOINT = "/home/ubuntu/im2txt/im2txt/train/model.ckpt-23864"
-VOCAB_FILE = "/home/ubuntu/im2txt/im2txt/data/coco/word_counts.txt"
+CHECKPOINT = tf.train.latest_checkpoint("/home/btrabucco/research/im2txt/im2txt/train/")
+VOCAB_FILE = "/home/btrabucco/research/im2txt/im2txt/data/coco/word_counts.txt"
 
 def run_once(encoded_image):
   # Build the inference graph.

@@ -141,6 +141,8 @@ class ShowAndTellModel(object):
       # No target sequences or input mask in inference mode.
       target_seqs = None
       input_mask = None
+      encoded_image = None
+      caption = None
     else:
       # Prefetch serialized SequenceExample protos.
       input_queue = input_ops.prefetch_input_data(
@@ -174,6 +176,7 @@ class ShowAndTellModel(object):
                                            queue_capacity=queue_capacity))
 
     self.images = images
+    self.encoded_images = encoded_image
     self.input_seqs = input_seqs
     self.target_seqs = target_seqs
     self.input_mask = input_mask
@@ -300,9 +303,11 @@ class ShowAndTellModel(object):
           weights_initializer=self.initializer,
           scope=logits_scope)
 
-    if self.mode == "inference":
-      tf.nn.softmax(logits, name="softmax")
-    else:
+    self.unscaled_logits = logits
+    self.softmax_outputs = tf.nn.softmax(logits, name="softmax")
+    print(self.softmax_outputs.shape)
+    
+    if self.mode != "inference":
       targets = tf.reshape(self.target_seqs, [-1])
       weights = tf.to_float(tf.reshape(self.input_mask, [-1]))
 

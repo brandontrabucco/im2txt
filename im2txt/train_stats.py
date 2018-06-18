@@ -41,6 +41,7 @@ tf.flags.DEFINE_string("input_file_pattern", "",
 tf.flags.DEFINE_string("checkpoint_dir", "",
                        "Directory containing model checkpoints.")
 tf.flags.DEFINE_string("eval_dir", "", "Directory to write event logs.")
+tf.flags.DEFINE_string("data_dump_dir", "", "Directory to write data dump file.")
 
 tf.flags.DEFINE_integer("eval_interval_secs", 600,
                         "Interval between evaluation runs.")
@@ -51,6 +52,9 @@ tf.flags.DEFINE_integer("min_global_step", 0,
                         "Minimum global step to run evaluation.")
 
 tf.logging.set_verbosity(tf.logging.INFO)
+
+
+DATA_DUMP = []
 
 
 def evaluate_model(sess, model, global_step, summary_writer, summary_op):
@@ -77,10 +81,36 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
   sum_losses = 0.
   sum_weights = 0.
   for i in range(num_eval_batches):
-    cross_entropy_losses, weights = sess.run([
-        model.target_cross_entropy_losses,
-        model.target_cross_entropy_loss_weights
-    ])
+        
+    (cross_entropy_losses, 
+      weights,
+      encoded_images,
+      images, 
+      input_seqs,
+      target_seqs,
+      input_mask,
+      softmax_outputs) = sess.run([
+          model.target_cross_entropy_losses,
+          model.target_cross_entropy_loss_weights,
+          model.encoded_images,
+          model.images,
+          model.input_seqs,
+          model.target_seqs,
+          model.input_mask,
+          model.softmax_outputs,
+      ])
+    
+    DATA_DUMP.append({
+        "losses": cross_entropy_losses, 
+        "losses_weights": weights,
+        "encoded_images": encoded_images,
+        "images": images, 
+        "input_seqs": input_seqs,
+        "target_seqs": target_seqs,
+        "input_mask": input_mask,
+        "softmax_outputs": softmax_outputs
+    })
+    
     sum_losses += np.sum(cross_entropy_losses * weights)
     sum_weights += np.sum(weights)
     if not i % 100:
@@ -177,20 +207,27 @@ def run():
     g.finalize()
 
     # Run a new evaluation run every eval_interval_secs.
-    while True:
-      start = time.time()
-      tf.logging.info("Starting evaluation at " + time.strftime(
-          "%Y-%m-%d-%H:%M:%S", time.localtime()))
-      run_once(model, saver, summary_writer, summary_op)
-      time_to_next_eval = start + FLAGS.eval_interval_secs - time.time()
-      if time_to_next_eval > 0:
-        time.sleep(time_to_next_eval)
+    start = time.time()
+    tf.logging.info("Starting evaluation at " + time.strftime(
+        "%Y-%m-%d-%H:%M:%S", time.localtime()))
+    run_once(model, saver, summary_writer, summary_op)
+    time_to_next_eval = start + FLAGS.eval_interval_secs - time.time()
+    if time_to_next_eval > 0:
+      time.sleep(time_to_next_eval)
+        
+      
+    import pickle
+    with open(FLAGS.data_dump_dir + "data_dump.pkl", "wb") as f:
+      for e in DATA_DUMP:
+        pickle.dump(e, f)
+      print("file written: " + FLAGS.data_dump_dir + "data_dump.pkl")
 
 
 def main(unused_argv):
   assert FLAGS.input_file_pattern, "--input_file_pattern is required"
   assert FLAGS.checkpoint_dir, "--checkpoint_dir is required"
   assert FLAGS.eval_dir, "--eval_dir is required"
+  assert FLAGS.data_dump_dir, "--data_dump_dir is required"
   run()
 
 
