@@ -27,7 +27,8 @@ import math
 import os.path
 import time
 
-
+import time
+import pickle as pkl
 import numpy as np
 import tensorflow as tf
 
@@ -42,13 +43,15 @@ tf.flags.DEFINE_string("checkpoint_dir", "",
                        "Directory containing model checkpoints.")
 tf.flags.DEFINE_string("eval_dir", "", "Directory to write event logs.")
 
-tf.flags.DEFINE_integer("eval_interval_secs", 600,
+tf.flags.DEFINE_integer("eval_interval_secs", 1800,
                         "Interval between evaluation runs.")
 tf.flags.DEFINE_integer("num_eval_examples", 10132,
                         "Number of examples for evaluation.")
 
 tf.flags.DEFINE_integer("min_global_step", 0,
                         "Minimum global step to run evaluation.")
+tf.flags.DEFINE_integer("dumps_per_eval", 100, 
+                        "Number of times to write to dump file per eval")
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -69,23 +72,86 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
   summary_str = sess.run(summary_op)
   summary_writer.add_summary(summary_str, global_step)
 
-  # Compute perplexity over the entire dataset.
-  num_eval_batches = int(
-      math.ceil(FLAGS.num_eval_examples / model.config.batch_size))
+  # Collect a single instance of model data
+  single_indicator_data = {
+    "losses": None,
+    "weights": None,
+    "images": None,
+    "inception": None,
+    "context": None,
+    "input_seqs": None,
+    "target_seqs": None,
+    "input_mask": None,
+    "softmax": None}
 
-  start_time = time.time()
-  sum_losses = 0.
-  sum_weights = 0.
-  for i in range(num_eval_batches):
-    cross_entropy_losses, weights = sess.run([
-        model.target_cross_entropy_losses,
-        model.target_cross_entropy_loss_weights
-    ])
-    sum_losses += np.sum(cross_entropy_losses * weights)
-    sum_weights += np.sum(weights)
-    if not i % 100:
-      tf.logging.info("Computed losses for %d of %d batches.", i + 1,
-                      num_eval_batches)
+  # Open the file to dump data into
+  with open(
+      FLAGS.eval_dir + ("dump." + str(long(time.time())) + ".pkl"),
+      "wb") as f:
+
+    # Compute perplexity over the entire dataset.
+    num_eval_batches = int(
+        math.ceil(FLAGS.num_eval_examples / model.config.batch_size))
+
+    start_time = time.time()
+    sum_losses = 0.
+    sum_weights = 0.
+    for i in range(num_eval_batches):
+
+      (cross_entropy_losses, 
+        weights,
+        images,
+        inception,
+        context,
+        input_seqs,
+        target_seqs,
+        input_mask,
+        softmax) = sess.run([
+          model.target_cross_entropy_losses,
+          model.target_cross_entropy_loss_weights,
+          model.images,
+          model.inception_output,
+          model.image_embeddings,
+          model.input_seqs,
+          model.target_seqs,
+          model.input_mask,
+          model.softmax_outputs
+      ])
+
+      # For each element of the batch write to file
+      for b in range(images.shape[0]):
+
+        if (b * num_eval_batches + i) % (num_eval_batches 
+            * images.shape[0] // FLAGS.dumps_per_eval) == 0:
+        
+          # Calculate start and end slices for vertically stacked batches
+          start_slice = i * target_seqs.shape[1]
+          end_slice = (i+1) * target_seqs.shape[1]
+
+          # Catch out of bounds errors when batches are abnormally small
+          if weights.shape[0] <= start_slice or weights.shape[0] < end_slice:
+            break
+
+          # Save each element of the batch
+          single_indicator_data["losses"] = cross_entropy_losses[start_slice:end_slice]
+          single_indicator_data["weights"] = weights[start_slice:end_slice]
+          single_indicator_data["images"] = images[i, :, :, :]/2.0 - images[i, :, :, :]/2.0
+          single_indicator_data["inception"] = inception[i, :, :, :]
+          single_indicator_data["context"] = context[i, :]
+          single_indicator_data["input_seqs"] = input_seqs[i, :]
+          single_indicator_data["target_seqs"] = target_seqs[i, :]
+          single_indicator_data["input_mask"] = input_mask[i, :]
+          single_indicator_data["softmax"] = softmax[start_slice:end_slice, :]
+
+          # Save the indicator using pickle
+          tf.logging.info("Saving element %d of batch %d indicators.", b, i)
+          pkl.dump(single_indicator_data, f)
+
+  sum_losses += np.sum(cross_entropy_losses * weights)
+  sum_weights += np.sum(weights)
+  if not i % 100:
+    tf.logging.info("Computed losses for %d of %d batches.", i + 1,
+                    num_eval_batches)
   eval_time = time.time() - start_time
 
   perplexity = math.exp(sum_losses / sum_weights)

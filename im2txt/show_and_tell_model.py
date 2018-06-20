@@ -197,10 +197,13 @@ class ShowAndTellModel(object):
     self.inception_variables = tf.get_collection(
         tf.GraphKeys.GLOBAL_VARIABLES, scope="InceptionV3")
 
+    # Compute the average pool of the outputs from inception
+    context_tensor = tf.reduce_mean(inception_output, axis=[1, 2])
+
     # Map inception output into embedding space.
     with tf.variable_scope("image_embedding") as scope:
       image_embeddings = tf.contrib.layers.fully_connected(
-          inputs=inception_output,
+          inputs=context_tensor,
           num_outputs=self.config.embedding_size,
           activation_fn=None,
           weights_initializer=self.initializer,
@@ -210,6 +213,7 @@ class ShowAndTellModel(object):
     # Save the embedding size in the graph.
     tf.constant(self.config.embedding_size, name="embedding_size")
 
+    self.inception_output = inception_output
     self.image_embeddings = image_embeddings
 
   def build_seq_embeddings(self):
@@ -305,7 +309,6 @@ class ShowAndTellModel(object):
 
     self.unscaled_logits = logits
     self.softmax_outputs = tf.nn.softmax(logits, name="softmax")
-    print(self.softmax_outputs.shape)
     
     if self.mode != "inference":
       targets = tf.reshape(self.target_seqs, [-1])

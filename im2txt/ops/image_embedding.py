@@ -96,15 +96,6 @@ def inception_v3(images,
           normalizer_fn=slim.batch_norm,
           normalizer_params=batch_norm_params):
         net, end_points = inception_v3_base(images, scope=scope)
-        with tf.variable_scope("logits"):
-          shape = net.get_shape()
-          net = slim.avg_pool2d(net, shape[1:3], padding="VALID", scope="pool")
-          net = slim.dropout(
-              net,
-              keep_prob=dropout_keep_prob,
-              is_training=is_inception_model_training,
-              scope="dropout")
-          net = slim.flatten(net, scope="flatten")
 
   # Add summaries.
   if add_summaries:
