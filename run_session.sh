@@ -13,7 +13,7 @@ set -x
 # this job assumes:
 # - all input data is stored in this directory 
 # - all output should be stored in this directory 
-cd "$SCRAYCH/research/repos/im2txt"
+cd "$SCRATCH/research/repos/im2txt"
 
 #run GPU program
 ./eval.sh &

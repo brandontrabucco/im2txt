@@ -29,10 +29,10 @@ from im2txt import inference_wrapper
 from im2txt.inference_utils import caption_generator
 from im2txt.inference_utils import vocabulary
 
-CHECKPOINT = tf.train.latest_checkpoint("/home/btrabucco/research/im2txt/im2txt/train/")
-VOCAB_FILE = "/home/btrabucco/research/im2txt/im2txt/data/coco/word_counts.txt"
+CHECKPOINT = tf.train.latest_checkpoint("/pylon5/ir5fp2p/trabucco/research/ckpts/im2txt/train/")
+VOCAB_FILE = "/pylon5/ir5fp2p/trabucco/research/data/coco/word_counts.txt"
 
-def run_once(encoded_image):
+def run_caption(encoded_image):
   # Build the inference graph.
   g = tf.Graph()
   with g.as_default():

@@ -74,6 +74,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
 
   # Collect a single instance of model data
   single_indicator_data = {
+    "global_step": 0,
     "losses": None,
     "weights": None,
     "images": None,
@@ -98,7 +99,8 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
     sum_weights = 0.
     for i in range(num_eval_batches):
 
-      (cross_entropy_losses, 
+      (global_step,
+        cross_entropy_losses, 
         weights,
         images,
         inception,
@@ -107,6 +109,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
         target_seqs,
         input_mask,
         softmax) = sess.run([
+          model.global_step,
           model.target_cross_entropy_losses,
           model.target_cross_entropy_loss_weights,
           model.images,
@@ -125,22 +128,23 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
             * images.shape[0] // FLAGS.dumps_per_eval) == 0:
         
           # Calculate start and end slices for vertically stacked batches
-          start_slice = i * target_seqs.shape[1]
-          end_slice = (i+1) * target_seqs.shape[1]
+          start_slice = b * target_seqs.shape[1]
+          end_slice = (b+1) * target_seqs.shape[1]
 
           # Catch out of bounds errors when batches are abnormally small
           if weights.shape[0] <= start_slice or weights.shape[0] < end_slice:
             break
 
           # Save each element of the batch
+          single_indicator_data["global_step"] = global_step
           single_indicator_data["losses"] = cross_entropy_losses[start_slice:end_slice]
           single_indicator_data["weights"] = weights[start_slice:end_slice]
-          single_indicator_data["images"] = images[i, :, :, :]/2.0 - images[i, :, :, :]/2.0
-          single_indicator_data["inception"] = inception[i, :, :, :]
-          single_indicator_data["context"] = context[i, :]
-          single_indicator_data["input_seqs"] = input_seqs[i, :]
-          single_indicator_data["target_seqs"] = target_seqs[i, :]
-          single_indicator_data["input_mask"] = input_mask[i, :]
+          single_indicator_data["images"] = (images[b, :, :, :] - images[b, :, :, :].min())/2.0
+          single_indicator_data["inception"] = inception[b, :, :, :]
+          single_indicator_data["context"] = context[b, :]
+          single_indicator_data["input_seqs"] = input_seqs[b, :]
+          single_indicator_data["target_seqs"] = target_seqs[b, :]
+          single_indicator_data["input_mask"] = input_mask[b, :]
           single_indicator_data["softmax"] = softmax[start_slice:end_slice, :]
 
           # Save the indicator using pickle
