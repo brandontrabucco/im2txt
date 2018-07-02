@@ -140,6 +140,7 @@ class ShowAndTellModel(object):
 
       # No target sequences or input mask in inference mode.
       target_seqs = None
+      image_ids = None
       input_mask = None
       encoded_image = None
       caption = None
