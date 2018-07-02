@@ -160,22 +160,24 @@ class ShowAndTellModel(object):
       images_and_captions = []
       for thread_id in range(self.config.num_preprocess_threads):
         serialized_sequence_example = input_queue.dequeue()
-        encoded_image, caption = input_ops.parse_sequence_example(
+        encoded_image, encoded_id, caption = input_ops.parse_sequence_example(
             serialized_sequence_example,
             image_feature=self.config.image_feature_name,
+            image_id=self.config.image_id_name,
             caption_feature=self.config.caption_feature_name)
         image = self.process_image(encoded_image, thread_id=thread_id)
-        images_and_captions.append([image, caption])
+        images_and_captions.append([image, encoded_id, caption])
 
       # Batch inputs.
       queue_capacity = (2 * self.config.num_preprocess_threads *
                         self.config.batch_size)
-      images, input_seqs, target_seqs, input_mask = (
+      images, image_ids, input_seqs, target_seqs, input_mask = (
           input_ops.batch_with_dynamic_pad(images_and_captions,
                                            batch_size=self.config.batch_size,
                                            queue_capacity=queue_capacity))
 
     self.images = images
+    self.image_ids = image_ids
     self.encoded_images = encoded_image
     self.input_seqs = input_seqs
     self.target_seqs = target_seqs

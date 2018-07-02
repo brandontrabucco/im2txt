@@ -27,13 +27,16 @@ import math
 import os.path
 import time
 
-import time
+import json
 import pickle as pkl
 import numpy as np
 import tensorflow as tf
 
 from im2txt import configuration
 from im2txt import show_and_tell_model
+from im2txt.inference_utils import vocabulary
+from pycocoapi.coco import COCO
+from pycocoapi.eval import COCOEvalCap
 
 FLAGS = tf.flags.FLAGS
 
@@ -42,13 +45,15 @@ tf.flags.DEFINE_string("input_file_pattern", "",
 tf.flags.DEFINE_string("checkpoint_dir", "",
                        "Directory containing model checkpoints.")
 tf.flags.DEFINE_string("eval_dir", "", "Directory to write event logs.")
+tf.flags.DEFINE_string("vocab_file", "", "The word_counts.txt for the COCO dataset.")
+tf.flags.DEFINE_string("annotations_file", "", "The captions annotations json file.")
 
 tf.flags.DEFINE_integer("eval_interval_secs", 1800,
                         "Interval between evaluation runs.")
 tf.flags.DEFINE_integer("num_eval_examples", 10132,
                         "Number of examples for evaluation.")
 
-tf.flags.DEFINE_integer("min_global_step", 0,
+tf.flags.DEFINE_integer("min_global_step", 1000,
                         "Minimum global step to run evaluation.")
 tf.flags.DEFINE_integer("dumps_per_eval", 100, 
                         "Number of times to write to dump file per eval")
@@ -78,6 +83,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
     "losses": None,
     "weights": None,
     "images": None,
+    "image_ids": None,
     "inception": None,
     "context": None,
     "input_seqs": None,
@@ -85,9 +91,14 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
     "input_mask": None,
     "softmax": None}
 
+  time_now = int(time.time())
+
+  json_dump = []
+  vocab = vocabulary.Vocabulary(FLAGS.vocab_file)
+
   # Open the file to dump data into
   with open(
-      FLAGS.eval_dir + ("dump." + str(long(time.time())) + ".pkl"),
+      FLAGS.eval_dir + ("dump." + str(time_now) + ".pkl"),
       "wb") as f:
 
     # Compute perplexity over the entire dataset.
@@ -97,12 +108,16 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
     start_time = time.time()
     sum_losses = 0.
     sum_weights = 0.
+
+    unique_image_ids = set()
+
     for i in range(num_eval_batches):
 
       (global_step,
         cross_entropy_losses, 
         weights,
         images,
+        image_ids,
         inception,
         context,
         input_seqs,
@@ -113,6 +128,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
           model.target_cross_entropy_losses,
           model.target_cross_entropy_loss_weights,
           model.images,
+          model.image_ids,
           model.inception_output,
           model.image_embeddings,
           model.input_seqs,
@@ -124,7 +140,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
       # For each element of the batch write to file
       for b in range(images.shape[0]):
 
-        if (b * num_eval_batches + i) % (num_eval_batches 
+        if (i * images.shape[0] + b) % (num_eval_batches 
             * images.shape[0] // FLAGS.dumps_per_eval) == 0:
         
           # Calculate start and end slices for vertically stacked batches
@@ -140,6 +156,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
           single_indicator_data["losses"] = cross_entropy_losses[start_slice:end_slice]
           single_indicator_data["weights"] = weights[start_slice:end_slice]
           single_indicator_data["images"] = (images[b, :, :, :] - images[b, :, :, :].min())/2.0
+          single_indicator_data["image_ids"] = image_ids[b]
           single_indicator_data["inception"] = inception[b, :, :, :]
           single_indicator_data["context"] = context[b, :]
           single_indicator_data["input_seqs"] = input_seqs[b, :]
@@ -148,8 +165,46 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
           single_indicator_data["softmax"] = softmax[start_slice:end_slice, :]
 
           # Save the indicator using pickle
-          tf.logging.info("Saving element %d of batch %d indicators.", b, i)
           pkl.dump(single_indicator_data, f)
+
+          # Collect predicted captions and image ids for evaluation
+          generated_caption = ""
+          for w in np.argmax(single_indicator_data["softmax"], axis=1):
+            w = str(vocab.id_to_word(w))
+            if w == "</S>":
+              break
+            generated_caption += w + " "
+            if w == ".":
+              break
+
+          # Use caption only if id is unique
+          if image_ids[b] not in unique_image_ids:
+            json_dump.append({"image_id": int(np.sum(image_ids[b])), "caption": generated_caption})
+            tf.logging.info("Progress: %.2f | Caption: %s", 
+              (i * images.shape[0] + b)/(num_eval_batches * images.shape[0]), 
+              json_dump[-1]["caption"])
+            unique_image_ids.add(image_ids[b])
+
+  # Output a temporary results file for evaluation
+  with open(
+      FLAGS.eval_dir + "results." + str(time_now) + ".json", 
+      "w") as f:
+    json.dump(json_dump, f)
+
+  # Evaluate the results file
+  coco = COCO(FLAGS.annotations_file)
+  cocoRes = coco.loadRes(FLAGS.eval_dir + "results." + str(time_now) + ".json")
+  cocoEval = COCOEvalCap(coco, cocoRes)
+  cocoEval.params['image_id'] = cocoRes.getImgIds()
+  cocoEval.evaluate()
+
+  # Dump the results to a metrics file
+  with open(
+      FLAGS.eval_dir + "metrics." + str(time_now) + ".json",
+      "w") as f:
+    metrics_dump = {metric: float(np.sum(score)) for metric, score in cocoEval.eval.items()}
+    metrics_dump["global_step"] = int(np.sum(global_step))
+    json.dump(metrics_dump, f)
 
   sum_losses += np.sum(cross_entropy_losses * weights)
   sum_weights += np.sum(weights)

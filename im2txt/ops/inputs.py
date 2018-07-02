@@ -23,7 +23,7 @@ from __future__ import print_function
 import tensorflow as tf
 
 
-def parse_sequence_example(serialized, image_feature, caption_feature):
+def parse_sequence_example(serialized, image_feature, image_id, caption_feature):
   """Parses a tensorflow.SequenceExample into an image and caption.
 
   Args:
@@ -40,15 +40,17 @@ def parse_sequence_example(serialized, image_feature, caption_feature):
   context, sequence = tf.parse_single_sequence_example(
       serialized,
       context_features={
-          image_feature: tf.FixedLenFeature([], dtype=tf.string)
+          image_feature: tf.FixedLenFeature([], dtype=tf.string),
+          image_id: tf.FixedLenFeature([], dtype=tf.int64)
       },
       sequence_features={
           caption_feature: tf.FixedLenSequenceFeature([], dtype=tf.int64),
       })
 
   encoded_image = context[image_feature]
+  encoded_id = context[image_id]
   caption = sequence[caption_feature]
-  return encoded_image, caption
+  return encoded_image, encoded_id, caption
 
 
 def prefetch_input_data(reader,
@@ -179,16 +181,16 @@ def batch_with_dynamic_pad(images_and_captions,
     mask: An int32 0/1 Tensor of shape [batch_size, padded_length].
   """
   enqueue_list = []
-  for image, caption in images_and_captions:
+  for image, image_id, caption in images_and_captions:
     caption_length = tf.shape(caption)[0]
     input_length = tf.expand_dims(tf.subtract(caption_length, 1), 0)
 
     input_seq = tf.slice(caption, [0], input_length)
     target_seq = tf.slice(caption, [1], input_length)
     indicator = tf.ones(input_length, dtype=tf.int32)
-    enqueue_list.append([image, input_seq, target_seq, indicator])
+    enqueue_list.append([image, image_id, input_seq, target_seq, indicator])
 
-  images, input_seqs, target_seqs, mask = tf.train.batch_join(
+  images, image_ids, input_seqs, target_seqs, mask = tf.train.batch_join(
       enqueue_list,
       batch_size=batch_size,
       capacity=queue_capacity,
@@ -201,4 +203,4 @@ def batch_with_dynamic_pad(images_and_captions,
     tf.summary.scalar("caption_length/batch_max", tf.reduce_max(lengths))
     tf.summary.scalar("caption_length/batch_mean", tf.reduce_mean(lengths))
 
-  return images, input_seqs, target_seqs, mask
+  return images, image_ids, input_seqs, target_seqs, mask
