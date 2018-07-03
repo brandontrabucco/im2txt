@@ -228,13 +228,26 @@ class ShowAndTellModel(object):
       self.seq_embeddings
     """
     with tf.variable_scope("seq_embedding"), tf.device("/cpu:0"):
+
       embedding_map = tf.get_variable(
           name="map",
           shape=[self.config.vocab_size, self.config.embedding_size],
           initializer=self.initializer)
       seq_embeddings = tf.nn.embedding_lookup(embedding_map, self.input_seqs)
 
+      vocab_seqs = tf.range(self.config.vocab_size)
+      distance_seqs = tf.placeholder(dtype=tf.int32, shape=[None], name="distance_feed")
+      vocab_embedded = tf.nn.embedding_lookup(embedding_map, vocab_seqs)
+      distance_embedded = tf.nn.embedding_lookup(embedding_map, distance_seqs)
+      vocab_distances = tf.norm(tf.expand_dims(vocab_embedded, axis=0) - tf.expand_dims(distance_embedded, axis=1), axis=2)
+      vocab_best_values, vocab_best_indices = tf.nn.top_k(-vocab_distances, k=20)
+
+    self.embedding_map = embedding_map
     self.seq_embeddings = seq_embeddings
+    self.distance_feed = distance_seqs
+    self.vocab_distances = vocab_distances
+    self.vocab_best_values = -vocab_best_values
+    self.vocab_best_indices = vocab_best_indices
 
   def build_model(self):
     """Builds the model.

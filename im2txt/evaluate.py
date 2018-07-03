@@ -96,6 +96,31 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
   json_dump = []
   vocab = vocabulary.Vocabulary(FLAGS.vocab_file)
 
+  # Maybe compute the vocab embeddings and distances
+  if not os.path.exists(FLAGS.eval_dir + "vocab.distances.json"):
+
+    vocab_dump = []
+    for m in range(model.config.vocab_size):
+      vocab_best_values, vocab_best_indices = sess.run([
+        model.vocab_best_values, model.vocab_best_indices], 
+        feed_dict={model.distance_feed: [m]})
+      current_word = {
+          "word_id": m,
+          "word_name": vocab.id_to_word(m),
+          "neighbors": []}
+
+      for k in range(vocab_best_indices.size):
+        current_word["neighbors"].append({
+          "word_id": int(np.sum(vocab_best_indices[0, k])),
+          "word_name": vocab.id_to_word(vocab_best_indices[0, k]),
+          "word_distance": float(np.sum(vocab_best_values[0, k]))})
+      vocab_dump.append(current_word)
+
+    with open(
+        FLAGS.eval_dir + "vocab.distances.json",
+        "w") as f:
+      json.dump(vocab_dump, f)
+
   # Open the file to dump data into
   with open(
       FLAGS.eval_dir + ("dump." + str(time_now) + ".pkl"),
