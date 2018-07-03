@@ -29,8 +29,16 @@ from im2txt import inference_wrapper
 from im2txt.inference_utils import caption_generator
 from im2txt.inference_utils import vocabulary
 
-CHECKPOINT = tf.train.latest_checkpoint("/pylon5/ir5fp2p/trabucco/research/ckpts/im2txt/train/")
-VOCAB_FILE = "/pylon5/ir5fp2p/trabucco/research/data/coco/word_counts.txt"
+
+IS_AWS_DEPLOYED = True
+
+if IS_AWS_DEPLOYED:
+  CHECKPOINT = tf.train.latest_checkpoint("/home/ubuntu/train/")
+  VOCAB_FILE = "/home/ubuntu/data/coco/word_counts.txt"
+else:
+  CHECKPOINT = tf.train.latest_checkpoint("/pylon5/ir5fp2p/trabucco/research/ckpts/im2txt/train/")
+  VOCAB_FILE = "/pylon5/ir5fp2p/trabucco/research/data/coco/word_counts.txt"
+
 
 def run_caption(encoded_image):
   # Build the inference graph.
