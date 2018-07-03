@@ -30,7 +30,7 @@ from im2txt.inference_utils import caption_generator
 from im2txt.inference_utils import vocabulary
 
 
-IS_AWS_DEPLOYED = True
+IS_AWS_DEPLOYED = False
 
 if IS_AWS_DEPLOYED:
   CHECKPOINT = tf.train.latest_checkpoint("/home/ubuntu/train/")

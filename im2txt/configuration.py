@@ -78,6 +78,10 @@ class ModelConfig(object):
     # If < 1.0, the dropout keep probability applied to LSTM variables.
     self.lstm_dropout_keep_prob = 0.7
 
+    # Generality heuristic parameters
+    self.generality_heuristic_samples = 100
+    self.generality_heuristic_file = "/pylon5/ir5fp2p/trabucco/research/ckpts/im2txt/eval/generality.heuristic.csv"
+   
 
 class TrainingConfig(object):
   """Wrapper class for training hyperparameters."""

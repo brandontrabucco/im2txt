@@ -77,6 +77,24 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
   summary_str = sess.run(summary_op)
   summary_writer.add_summary(summary_str, global_step)
 
+  if not os.path.isfile(model.config.generality_heuristic_file):
+    # Update the word heuristic file using the model
+    heuristic_dump = []
+    for w in range(model.config.vocab_size):
+      calculated_heuristic = sess.run(
+        model.calculated_heuristic,
+        feed_dict={model.heuristic_feed: [w]})
+      heuristic_dump.append(calculated_heuristic[0])
+
+    # Center and scale the heuristic
+    heuristic_dump = np.array(heuristic_dump)
+    heuristic_dump = heuristic_dump - heuristic_dump.min()
+    heuristic_dump = heuristic_dump / heuristic_dump.max()
+    np.savetxt(model.config.generality_heuristic_file, heuristic_dump)
+    tf.logging.info("Finished calculating word heuristics.")
+  else:
+    tf.logging.info("Skipping existing word heuristics.")
+
   # Collect a single instance of model data
   single_indicator_data = {
     "global_step": 0,
@@ -95,31 +113,6 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
 
   json_dump = []
   vocab = vocabulary.Vocabulary(FLAGS.vocab_file)
-
-  # Maybe compute the vocab embeddings and distances
-  if not os.path.exists(FLAGS.eval_dir + "vocab.distances.json"):
-
-    vocab_dump = []
-    for m in range(model.config.vocab_size):
-      vocab_best_values, vocab_best_indices = sess.run([
-        model.vocab_best_values, model.vocab_best_indices], 
-        feed_dict={model.distance_feed: [m]})
-      current_word = {
-          "word_id": m,
-          "word_name": vocab.id_to_word(m),
-          "neighbors": []}
-
-      for k in range(vocab_best_indices.size):
-        current_word["neighbors"].append({
-          "word_id": int(np.sum(vocab_best_indices[0, k])),
-          "word_name": vocab.id_to_word(vocab_best_indices[0, k]),
-          "word_distance": float(np.sum(vocab_best_values[0, k]))})
-      vocab_dump.append(current_word)
-
-    with open(
-        FLAGS.eval_dir + "vocab.distances.json",
-        "w") as f:
-      json.dump(vocab_dump, f)
 
   # Open the file to dump data into
   with open(

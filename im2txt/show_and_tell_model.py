@@ -25,6 +25,7 @@ from __future__ import print_function
 
 
 import tensorflow as tf
+import numpy as np
 
 from im2txt.ops import image_embedding
 from im2txt.ops import image_processing
@@ -144,6 +145,8 @@ class ShowAndTellModel(object):
       input_mask = None
       encoded_image = None
       caption = None
+      generality_table = None
+
     else:
       # Prefetch serialized SequenceExample protos.
       input_queue = input_ops.prefetch_input_data(
@@ -177,9 +180,15 @@ class ShowAndTellModel(object):
                                            batch_size=self.config.batch_size,
                                            queue_capacity=queue_capacity))
 
+      # Load the generality heiristic table
+      generality_table = np.loadtxt(self.config.generality_heuristic_file)
+      generality_table = generality_table[np.newaxis, :]
+      generality_table = tf.constant(generality_table, dtype=tf.float32)
+
     self.images = images
     self.image_ids = image_ids
     self.encoded_images = encoded_image
+    self.generality_table = generality_table
     self.input_seqs = input_seqs
     self.target_seqs = target_seqs
     self.input_mask = input_mask
@@ -236,19 +245,23 @@ class ShowAndTellModel(object):
           initializer=self.initializer)
       seq_embeddings = tf.nn.embedding_lookup(embedding_map, self.input_seqs)
 
-      vocab_seqs = tf.range(self.config.vocab_size)
-      distance_seqs = tf.placeholder(dtype=tf.int32, shape=[None], name="distance_feed")
-      vocab_embedded = tf.nn.embedding_lookup(embedding_map, vocab_seqs)
-      distance_embedded = tf.nn.embedding_lookup(embedding_map, distance_seqs)
-      vocab_distances = tf.norm(tf.expand_dims(vocab_embedded, axis=0) - tf.expand_dims(distance_embedded, axis=1), axis=2)
-      vocab_best_values, vocab_best_indices = tf.nn.top_k(-vocab_distances, k=20)
+      # Calculate the estimated embedding density
+      heuristic_feed = tf.placeholder(dtype=tf.int32, shape=[None], name="heuristic_feed")
+      vocab_embedded = tf.nn.embedding_lookup(embedding_map, tf.range(self.config.vocab_size))
+      heuristic_embedded = tf.nn.embedding_lookup(embedding_map, heuristic_feed)
+      vocab_distances = tf.norm(
+        tf.expand_dims(vocab_embedded, axis=0) -
+        tf.expand_dims(heuristic_embedded, axis=1), 
+        axis=2)
+      vocab_best_values, vocab_best_indices = tf.nn.top_k(
+        -vocab_distances,
+        k=self.config.generality_heuristic_samples)
+      calculated_heuristic = tf.reduce_sum(vocab_best_values, axis=1)
 
     self.embedding_map = embedding_map
     self.seq_embeddings = seq_embeddings
-    self.distance_feed = distance_seqs
-    self.vocab_distances = vocab_distances
-    self.vocab_best_values = -vocab_best_values
-    self.vocab_best_indices = vocab_best_indices
+    self.heuristic_feed = heuristic_feed
+    self.calculated_heuristic = calculated_heuristic
 
   def build_model(self):
     """Builds the model.
@@ -337,10 +350,19 @@ class ShowAndTellModel(object):
                           tf.reduce_sum(weights),
                           name="batch_loss")
       tf.losses.add_loss(batch_loss)
+
+      # Calculate heuristic reward for sampled words
+      heuristic_loss = tf.div(
+        tf.reduce_sum(tf.reduce_sum(
+          self.softmax_outputs * self.generality_table,
+          axis=1) * weights), tf.reduce_sum(weights), name="heuristic_loss")
+      tf.losses.add_loss(heuristic_loss)
+
       total_loss = tf.losses.get_total_loss()
 
       # Add summaries.
       tf.summary.scalar("losses/batch_loss", batch_loss)
+      tf.summary.scalar("losses/heuristic_loss", heuristic_loss)
       tf.summary.scalar("losses/total_loss", total_loss)
       for var in tf.trainable_variables():
         tf.summary.histogram("parameters/" + var.op.name, var)
