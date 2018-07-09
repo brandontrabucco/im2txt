@@ -42,7 +42,7 @@ FLAGS = tf.flags.FLAGS
 
 tf.flags.DEFINE_string("input_file_pattern", "",
                        "File pattern of sharded TFRecord input files.")
-tf.flasg.DEFINE_string("wikipedia_file_pattern", "",
+tf.flags.DEFINE_string("wikipedia_file_pattern", "",
                        "File pattern of sharded TFRecord wikipedia files.")
 tf.flags.DEFINE_string("checkpoint_dir", "",
                        "Directory containing model checkpoints.")

@@ -192,10 +192,9 @@ class ShowAndTellModel(object):
 
       # Load the generality heiristic table
       if not os.path.isfile(self.config.generality_heuristic_file):
-        generality_table = np.zeros([1, self.config.vocab_size])
-      else:
-        generality_table = np.loadtxt(self.config.generality_heuristic_file)
-        generality_table = generality_table[np.newaxis, :]
+        np.savetxt(self.config.generality_heuristic_file, np.zeros([self.config.vocab_size]))
+      generality_table = np.loadtxt(self.config.generality_heuristic_file)
+      generality_table = generality_table[np.newaxis, :]
       generality_table = tf.constant(generality_table, dtype=tf.float32)
 
       # Prefetch serialized SequenceExample protos.
