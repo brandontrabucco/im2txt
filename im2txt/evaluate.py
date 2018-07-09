@@ -42,6 +42,8 @@ FLAGS = tf.flags.FLAGS
 
 tf.flags.DEFINE_string("input_file_pattern", "",
                        "File pattern of sharded TFRecord input files.")
+tf.flasg.DEFINE_string("wikipedia_file_pattern", "",
+                       "File pattern of sharded TFRecord wikipedia files.")
 tf.flags.DEFINE_string("checkpoint_dir", "",
                        "Directory containing model checkpoints.")
 tf.flags.DEFINE_string("eval_dir", "", "Directory to write event logs.")
@@ -307,6 +309,7 @@ def run():
     # Build the model for evaluation.
     model_config = configuration.ModelConfig()
     model_config.input_file_pattern = FLAGS.input_file_pattern
+    model_config.wikipedia_file_pattern = FLAGS.wikipedia_file_pattern
     model = show_and_tell_model.ShowAndTellModel(model_config, mode="eval")
     model.build()
 
@@ -332,6 +335,7 @@ def run():
 
 def main(unused_argv):
   assert FLAGS.input_file_pattern, "--input_file_pattern is required"
+  assert FLAGS.wikipedia_file_pattern, "--wikipedia_file_pattern is required"
   assert FLAGS.checkpoint_dir, "--checkpoint_dir is required"
   assert FLAGS.eval_dir, "--eval_dir is required"
   run()

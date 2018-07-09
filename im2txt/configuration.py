@@ -51,7 +51,7 @@ class ModelConfig(object):
     # for differences between tokenizer versions used in preprocessing. There is
     # no harm in using a value greater than the actual vocab size, but using a
     # value less than the actual vocab size will result in an error.
-    self.vocab_size = 12000
+    self.vocab_size = 60000
 
     # Number of threads for image preprocessing. Should be a multiple of 2.
     self.num_preprocess_threads = 4
@@ -81,6 +81,14 @@ class ModelConfig(object):
     # Generality heuristic parameters
     self.generality_heuristic_samples = 100
     self.generality_heuristic_file = "/pylon5/ir5fp2p/trabucco/research/ckpts/im2txt/eval/generality.heuristic.csv"
+
+    # Wikipedia dataset parameters
+    self.wikipedia_file_pattern = None
+    self.article_id_name = "sentence/article_id"
+    self.sentence_id_name = "sencence/sentence_id"
+    self.title_feature_name = "sentence/article_title_ids"
+    self.sentence_feature_name = "sentence/sentence_words_ids"
+    self.values_per_wikipedia_shard = 83000
    
 
 class TrainingConfig(object):
