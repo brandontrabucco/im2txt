@@ -55,7 +55,7 @@ tf.flags.DEFINE_integer("eval_interval_secs", 1800,
 tf.flags.DEFINE_integer("num_eval_examples", 10132,
                         "Number of examples for evaluation.")
 
-tf.flags.DEFINE_integer("min_global_step", 1000,
+tf.flags.DEFINE_integer("min_global_step", 0,
                         "Minimum global step to run evaluation.")
 tf.flags.DEFINE_integer("dumps_per_eval", 100, 
                         "Number of times to write to dump file per eval")
@@ -154,7 +154,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
           model.input_seqs,
           model.target_seqs,
           model.input_mask,
-          model.softmax_outputs
+          model.mscoco_outputs
       ])
 
       # For each element of the batch write to file

@@ -122,7 +122,68 @@ class ShowAndTellModel(object):
                                           thread_id=thread_id,
                                           image_format=self.config.image_format)
 
-  def build_inputs(self):
+  def build_wikipedia_inputs(self):
+    """Input prefetching preprocessing and batching for wikipedia.
+    Training and eval only.
+
+    Outputs:
+      self.wikipedia_article_ids
+      self.wikipedia_sentence_ids
+      self.wikipedia_target_seqs
+      self.wikipedia_input_seqs
+      self.wikipedia_mask
+    """
+    if self.mode == "inference":
+      # Build wikipedia inputs
+      wikipedia_input_seqs = None
+      wikipedia_target_seqs = None
+      wikipedia_mask = None
+      wikipedia_article_id = None
+      wikipedia_sentence_id = None
+
+    else:
+      # Prefetch serialized SequenceExample protos.
+      wikipedia_queue = wikipedia_ops.prefetch_input_data(
+          self.reader_w,
+          self.config.wikipedia_file_pattern,
+          is_training=self.is_training(),
+          batch_size=self.config.batch_size,
+          values_per_shard=self.config.values_per_wikipedia_shard,
+          input_queue_capacity_factor=self.config.input_queue_capacity_factor,
+          num_reader_threads=self.config.num_input_reader_threads)
+
+      # Process sentences into a list from SequenceExamples
+      assert self.config.num_preprocess_threads % 2 == 0
+      sentence_features = []
+      for thread_id in range(self.config.num_preprocess_threads):
+        serialized_sequence_example = wikipedia_queue.dequeue()
+        w_buffer = wikipedia_ops.parse_sequence_example(
+            serialized_sequence_example,
+            article_id=self.config.article_id_name,
+            sentence_id=self.config.sentence_id_name,
+            title_feature=self.config.title_feature_name,
+            sentence_feature=self.config.sentence_feature_name)
+        sentence_features.append(w_buffer)
+
+      queue_capacity = (2 * self.config.num_preprocess_threads *
+                        self.config.batch_size)
+      # Build wikipedia inputs
+      (wikipedia_article_ids, 
+        wikipedia_sentence_ids, 
+        wikipedia_target_seqs, 
+        wikipedia_input_seqs, 
+        wikipedia_mask) = (
+            wikipedia_ops.batch_with_dynamic_pad(sentence_features,
+                                                 batch_size=self.config.batch_size,
+                                                 queue_capacity=queue_capacity))
+
+    self.wikipedia_article_ids = wikipedia_article_ids
+    self.wikipedia_sentence_ids = wikipedia_sentence_ids
+    self.wikipedia_target_seqs = wikipedia_target_seqs
+    self.wikipedia_input_seqs = wikipedia_input_seqs
+    self.wikipedia_mask = wikipedia_mask
+
+  def build_mscoco_inputs(self):
     """Input prefetching, preprocessing and batching.
 
     Outputs:
@@ -149,13 +210,6 @@ class ShowAndTellModel(object):
       encoded_image = None
       caption = None
       generality_table = None
-
-      # Build wikipedia inputs
-      wikipedia_input_seqs = None
-      wikipedia_target_seqs = None
-      wikipedia_mask = None
-      wikipedia_article_id = None
-      wikipedia_sentence_id = None
 
     else:
       # Prefetch serialized SequenceExample protos.
@@ -190,59 +244,12 @@ class ShowAndTellModel(object):
                                            batch_size=self.config.batch_size,
                                            queue_capacity=queue_capacity))
 
-      # Load the generality heiristic table
-      if not os.path.isfile(self.config.generality_heuristic_file):
-        np.savetxt(self.config.generality_heuristic_file, np.zeros([self.config.vocab_size]))
-      generality_table = np.loadtxt(self.config.generality_heuristic_file)
-      generality_table = generality_table[np.newaxis, :]
-      generality_table = tf.constant(generality_table, dtype=tf.float32)
-
-      # Prefetch serialized SequenceExample protos.
-      wikipedia_queue = wikipedia_ops.prefetch_input_data(
-          self.reader_w,
-          self.config.wikipedia_file_pattern,
-          is_training=self.is_training(),
-          batch_size=self.config.batch_size,
-          values_per_shard=self.config.values_per_wikipedia_shard,
-          input_queue_capacity_factor=self.config.input_queue_capacity_factor,
-          num_reader_threads=self.config.num_input_reader_threads)
-
-      # Process sentences into a list from SequenceExamples
-      assert self.config.num_preprocess_threads % 2 == 0
-      sentence_features = []
-      for thread_id in range(self.config.num_preprocess_threads):
-        serialized_sequence_example = wikipedia_queue.dequeue()
-        w_buffer = wikipedia_ops.parse_sequence_example(
-            serialized_sequence_example,
-            article_id=self.config.article_id_name,
-            sentence_id=self.config.sentence_id_name,
-            title_feature=self.config.title_feature_name,
-            sentence_feature=self.config.sentence_feature_name)
-        sentence_features.append(w_buffer)
-
-      # Build wikipedia inputs
-      (wikipedia_article_ids, 
-        wikipedia_sentence_ids, 
-        wikipedia_target_seqs, 
-        wikipedia_input_seqs, 
-        wikipedia_mask) = (
-            wikipedia_ops.batch_with_dynamic_pad(sentence_features,
-                                                 batch_size=self.config.batch_size,
-                                                 queue_capacity=queue_capacity))
-
     self.images = images
     self.image_ids = image_ids
     self.encoded_images = encoded_image
-    self.generality_table = generality_table
     self.input_seqs = input_seqs
     self.target_seqs = target_seqs
     self.input_mask = input_mask
-
-    self.wikipedia_article_ids = wikipedia_article_ids
-    self.wikipedia_sentence_ids = wikipedia_sentence_ids
-    self.wikipedia_target_seqs = wikipedia_target_seqs
-    self.wikipedia_input_seqs = wikipedia_input_seqs
-    self.wikipedia_mask = wikipedia_mask
 
   def build_image_embeddings(self):
     """Builds the image model subgraph and generates image embeddings.
@@ -264,19 +271,19 @@ class ShowAndTellModel(object):
     context_tensor = tf.reduce_mean(inception_output, axis=[1, 2])
 
     # Map inception output into embedding space.
-    with tf.variable_scope("image_embedding") as scope:
-      image_embeddings = tf.contrib.layers.fully_connected(
-          inputs=context_tensor,
-          num_outputs=self.config.embedding_size,
-          activation_fn=None,
-          weights_initializer=self.initializer,
-          biases_initializer=None,
-          scope=scope)
+    with tf.variable_scope("image_embedding"), tf.device("/cpu:0"):
+
+      image_embedding_map = tf.get_variable(
+          name="image_map",
+          shape=[context_tensor.shape[1], self.config.embedding_size],
+          initializer=self.initializer)
+      image_embeddings = tf.tensordot(context_tensor, image_embedding_map, 1)
 
     # Save the embedding size in the graph.
     tf.constant(self.config.embedding_size, name="embedding_size")
 
     self.inception_output = inception_output
+    self.image_embedding_map = image_embedding_map
     self.image_embeddings = image_embeddings
 
   def build_seq_embeddings(self):
@@ -297,26 +304,52 @@ class ShowAndTellModel(object):
       seq_embeddings = tf.nn.embedding_lookup(embedding_map, self.input_seqs)
       wikipedia_embeddings = tf.nn.embedding_lookup(embedding_map, self.wikipedia_input_seqs)
 
+    self.embedding_map = embedding_map
+    self.seq_embeddings = seq_embeddings
+    self.wikipedia_embeddings = wikipedia_embeddings
+
+  def build_heuristic(self):
+    """Builds heuristic calculation from vocabulary.
+    
+    Outputs:
+      self.heuristic_feed
+      self.calculated_heuristic
+      self.generality_table
+    """
+    if self.mode  == "inference":
+      generality_table = None
+      heuristic_feed = None
+      calculated_heuristic = None
+    
+    else:
+      # Load the generality heiristic table
+      if not os.path.isfile(self.config.generality_heuristic_file):
+        np.savetxt(self.config.generality_heuristic_file, np.zeros([self.config.vocab_size]))
+      generality_table = np.loadtxt(self.config.generality_heuristic_file)
+      generality_table = generality_table[np.newaxis, :]
+      generality_table = tf.constant(generality_table, dtype=tf.float32)
+
       # Calculate the estimated embedding density
       heuristic_feed = tf.placeholder(dtype=tf.int32, shape=[None], name="heuristic_feed")
-      vocab_embedded = tf.nn.embedding_lookup(embedding_map, tf.range(self.config.vocab_size))
-      heuristic_embedded = tf.nn.embedding_lookup(embedding_map, heuristic_feed)
+      vocab_embedded = tf.nn.embedding_lookup(self.embedding_map, tf.range(self.config.vocab_size))
+      heuristic_embedded = tf.nn.embedding_lookup(self.embedding_map, heuristic_feed)
+
+      # Calculate distance between word embeddings
+      # Sum for k closest neighbors
       vocab_distances = tf.norm(
         tf.expand_dims(vocab_embedded, axis=0) -
-        tf.expand_dims(heuristic_embedded, axis=1), 
+        tf.expand_dims(heuristic_embedded, axis=1),
         axis=2)
       vocab_best_values, vocab_best_indices = tf.nn.top_k(
         -vocab_distances,
         k=self.config.generality_heuristic_samples)
       calculated_heuristic = tf.reduce_sum(vocab_best_values, axis=1)
 
-    self.embedding_map = embedding_map
-    self.seq_embeddings = seq_embeddings
-    self.wikipedia_embeddings = wikipedia_embeddings
+    self.generality_table = generality_table
     self.heuristic_feed = heuristic_feed
     self.calculated_heuristic = calculated_heuristic
 
-  def build_model(self):
+  def build_lstm(self):
     """Builds the model.
 
     Inputs:
@@ -362,16 +395,17 @@ class ShowAndTellModel(object):
         state_tuple = tf.split(value=state_feed, num_or_size_splits=2, axis=1)
 
         # Run a single LSTM step.
-        lstm_outputs, state_tuple = lstm_cell(
+        mscoco_hidden, state_tuple = lstm_cell(
             inputs=tf.squeeze(self.seq_embeddings, axis=[1]),
             state=state_tuple)
 
         # Concatentate the resulting state.
         tf.concat(axis=1, values=state_tuple, name="state")
+
       else:
         # Run the batch of sequence embeddings through the LSTM.
         sequence_length = tf.reduce_sum(self.input_mask, 1)
-        lstm_outputs, _ = tf.nn.dynamic_rnn(cell=lstm_cell,
+        mscoco_hidden, _ = tf.nn.dynamic_rnn(cell=lstm_cell,
                                             inputs=self.seq_embeddings,
                                             sequence_length=sequence_length,
                                             initial_state=initial_state,
@@ -380,7 +414,7 @@ class ShowAndTellModel(object):
 
         # Run the LSTM on wikipedia
         wikipedia_length = tf.reduce_sum(self.wikipedia_mask, 1)
-        wikipedia_outputs, _ = tf.nn.dynamic_rnn(cell=lstm_cell,
+        wikipedia_hidden, _ = tf.nn.dynamic_rnn(cell=lstm_cell,
                                             inputs=self.wikipedia_embeddings,
                                             sequence_length=wikipedia_length,
                                             initial_state=zero_state,
@@ -388,61 +422,86 @@ class ShowAndTellModel(object):
                                             scope=lstm_scope)
 
     # Stack batches vertically.
-    lstm_outputs = tf.reshape(lstm_outputs, [-1, lstm_cell.output_size])
-    wikipedia_outputs = tf.reshape(wikipedia_outputs, [-1, lstm_cell.output_size])
+    mscoco_hidden = tf.reshape(mscoco_hidden, [-1, lstm_cell.output_size])
+    wikipedia_hidden = tf.reshape(wikipedia_hidden, [-1, lstm_cell.output_size])
 
     # Note 2018.07.06: Removed additional separate fully connected layer
     with tf.variable_scope("logits") as logits_scope:
-      logits = tf.tensordot(lstm_outputs, tf.transpose(self.embedding_map), 1)
-      wikipedia_logits = tf.tensordot(wikipedia_outputs, tf.transpose(self.embedding_map), 1)
+      mscoco_logits = tf.tensordot(mscoco_hidden, tf.transpose(self.embedding_map), 1)
+      wikipedia_logits = tf.tensordot(wikipedia_hidden, tf.transpose(self.embedding_map), 1)
 
-    self.unscaled_logits = logits
-    self.unscaled_wikipedia_logits = wikipedia_logits
-    self.softmax_outputs = tf.nn.softmax(logits, name="softmax")
-    self.wikipedia_softmax_outputs = tf.nn.softmax(wikipedia_logits, name="wikipedia_softmax")
-    
+    self.mscoco_logits = mscoco_logits
+    self.wikipedia_logits = wikipedia_logits
+    self.mscoco_outputs = tf.nn.softmax(mscoco_logits, name="mscoco_softmax")
+    self.wikipedia_outputs = tf.nn.softmax(wikipedia_logits, name="wikipedia_softmax")
+
+  def build_losses(self):
+    """Builds the losses on which to optimize the model.
+    Inputs:
+      self.target_seqs
+      self.wikipedia_target_seqs
+      self.input_mask
+      self.wikipedia_mask
+      self.unscaled_logits
+      self.softmax_outputs
+      self.wikipedia_logits
+      self.wikipedia_outputs
+
+    Outputs:
+      self.total_loss
+      self.target_cross_entropy_losses
+      self.target)cross_entropy_loss_weights
+    """
     if self.mode != "inference":
-      targets = tf.reshape(self.target_seqs, [-1])
+      mscoco_targets = tf.reshape(self.target_seqs, [-1])
       wikipedia_targets = tf.reshape(self.wikipedia_target_seqs, [-1])
-      weights = tf.to_float(tf.reshape(self.input_mask, [-1]))
+      mscoco_weights = tf.to_float(tf.reshape(self.input_mask, [-1]))
       wikipedia_weights = tf.to_float(tf.reshape(self.wikipedia_mask, [-1]))
 
       # Compute losses.
-      losses = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets,
-                                                              logits=logits)
-      batch_loss = tf.div(tf.reduce_sum(tf.multiply(losses, weights)),
-                          tf.reduce_sum(weights),
+      mscoco_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=mscoco_targets,
+                                                              logits=self.mscoco_logits)
+      mscoco_loss = tf.div(tf.reduce_sum(tf.multiply(mscoco_losses, mscoco_weights)),
+                          tf.reduce_sum(mscoco_weights),
                           name="batch_loss")
-      tf.losses.add_loss(batch_loss)
+      tf.losses.add_loss(mscoco_loss)
 
       # Compute loss for wikipedia
       wikipedia_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=wikipedia_targets,
-                                                                        logits=wikipedia_logits)
+                                                                        logits=self.wikipedia_logits)
       wikipedia_loss = tf.div(tf.reduce_sum(tf.multiply(wikipedia_losses, wikipedia_weights)),
                               tf.reduce_sum(wikipedia_weights),
                               name="wikipedia_loss")
       tf.losses.add_loss(wikipedia_loss)
 
-      # Calculate heuristic reward for sampled words
-      heuristic_loss = tf.div(
+      # Calculate heuristic reward for sampled words on mscoco
+      mscoco_heuristic = tf.div(
         tf.reduce_sum(tf.reduce_sum(
-          self.softmax_outputs * self.generality_table,
-          axis=1) * weights), tf.reduce_sum(weights), name="heuristic_loss")
-      tf.losses.add_loss(heuristic_loss)
+          self.mscoco_outputs * self.generality_table,
+          axis=1) * mscoco_weights), tf.reduce_sum(mscoco_weights), name="mscoco_heuristic")
+      tf.losses.add_loss(mscoco_heuristic)
+
+      # Calculate heuristic reward for sampled words on wikipedia
+      wikipedia_heuristic = tf.div(
+        tf.reduce_sum(tf.reduce_sum(
+          self.wikipedia_outputs * self.generality_table,
+          axis=1) * wikipedia_weights), tf.reduce_sum(wikipedia_weights), name="wikipedia_heuristic")
+      tf.losses.add_loss(wikipedia_heuristic)
 
       total_loss = tf.losses.get_total_loss()
 
       # Add summaries.
-      tf.summary.scalar("losses/batch_loss", batch_loss)
+      tf.summary.scalar("losses/mscoco_loss", mscoco_loss)
       tf.summary.scalar("losses/wikipedia_loss", wikipedia_loss)
-      tf.summary.scalar("losses/heuristic_loss", heuristic_loss)
+      tf.summary.scalar("losses/mscoco_heuristic", mscoco_heuristic)
+      tf.summary.scalar("losses/wikipedia_heuristic", wikipedia_heuristic)
       tf.summary.scalar("losses/total_loss", total_loss)
       for var in tf.trainable_variables():
         tf.summary.histogram("parameters/" + var.op.name, var)
 
       self.total_loss = total_loss
-      self.target_cross_entropy_losses = losses  # Used in evaluation.
-      self.target_cross_entropy_loss_weights = weights  # Used in evaluation.
+      self.target_cross_entropy_losses = mscoco_losses  # Used in evaluation.
+      self.target_cross_entropy_loss_weights = mscoco_weights  # Used in evaluation.
 
   def setup_inception_initializer(self):
     """Sets up the function to restore inception variables from checkpoint."""
@@ -469,9 +528,12 @@ class ShowAndTellModel(object):
 
   def build(self):
     """Creates all ops for training and evaluation."""
-    self.build_inputs()
+    self.build_mscoco_inputs()
+    self.build_wikipedia_inputs()
     self.build_image_embeddings()
     self.build_seq_embeddings()
-    self.build_model()
+    self.build_heuristic()
+    self.build_lstm()
+    self.build_losses()
     self.setup_inception_initializer()
     self.setup_global_step()
