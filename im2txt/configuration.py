@@ -79,6 +79,7 @@ class ModelConfig(object):
     self.lstm_dropout_keep_prob = 0.7
 
     # Generality heuristic parameters
+    self.use_generality_heuristic = False
     self.generality_heuristic_samples = 100
     self.generality_heuristic_file = "/pylon5/ir5fp2p/trabucco/research/ckpts/im2txt/eval/generality.heuristic.csv"
 

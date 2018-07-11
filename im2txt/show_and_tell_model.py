@@ -170,8 +170,8 @@ class ShowAndTellModel(object):
       # Build wikipedia inputs
       (wikipedia_article_ids, 
         wikipedia_sentence_ids, 
+        wikipedia_input_seqs,
         wikipedia_target_seqs, 
-        wikipedia_input_seqs, 
         wikipedia_mask) = (
             wikipedia_ops.batch_with_dynamic_pad(sentence_features,
                                                  batch_size=self.config.batch_size,
@@ -426,7 +426,7 @@ class ShowAndTellModel(object):
     wikipedia_hidden = tf.reshape(wikipedia_hidden, [-1, lstm_cell.output_size])
 
     # Note 2018.07.06: Removed additional separate fully connected layer
-    with tf.variable_scope("logits") as logits_scope:
+    with tf.variable_scope("logits"):
       mscoco_logits = tf.tensordot(mscoco_hidden, tf.transpose(self.embedding_map), 1)
       wikipedia_logits = tf.tensordot(wikipedia_hidden, tf.transpose(self.embedding_map), 1)
 

@@ -63,6 +63,69 @@ tf.flags.DEFINE_integer("dumps_per_eval", 100,
 tf.logging.set_verbosity(tf.logging.INFO)
 
 
+def maybe_update_heuristic(sess, model):
+  """Compute the generality heuristic of the vocab.
+  """
+  if not os.path.isfile(model.config.generality_heuristic_file):
+    # Update the word heuristic file using the model
+    heuristic_dump = []
+    for w in range(model.config.vocab_size):
+      calculated_heuristic = sess.run(
+        model.calculated_heuristic,
+        feed_dict={model.heuristic_feed: [w]})
+      heuristic_dump.append(calculated_heuristic[0])
+ 
+    # Center and scale the heuristic
+    heuristic_dump = np.array(heuristic_dump)
+    heuristic_dump = heuristic_dump - heuristic_dump.min()
+    heuristic_dump = heuristic_dump / heuristic_dump.max()
+    np.savetxt(model.config.generality_heuristic_file, heuristic_dump)
+    tf.logging.info("Finished calculating word heuristics.")
+  else:
+    tf.logging.info("Skipping existing word heuristics.") 
+
+
+def coco_get_metrics(time_now, global_step):
+  """Get the performance metrics on the dataset.
+  """
+  # Evaluate the results file
+  coco = COCO(FLAGS.annotations_file)
+  cocoRes = coco.loadRes(FLAGS.eval_dir + "results." + str(time_now) + ".json")
+  cocoEval = COCOEvalCap(coco, cocoRes)
+  cocoEval.params['image_id'] = cocoRes.getImgIds()
+  cocoEval.evaluate()
+
+  # Dump the results to a metrics file
+  with open(
+      FLAGS.eval_dir + "metrics." + str(time_now) + ".json",
+      "w") as f:
+    metrics_dump = {metric: float(np.sum(score)) for metric, score in cocoEval.eval.items()}
+    metrics_dump["global_step"] = int(np.sum(global_step))
+    json.dump(metrics_dump, f)
+
+
+def check_add_caption(probs, vocab, image_ids, unique_image_ids, i, b, json_dump, num_eval_batches):
+  """Check whether the caption is unique and add to dump.
+  """
+  if image_ids[b] not in unique_image_ids:
+    # Collect predicted captions and image ids for evaluation
+    generated_caption = ""
+    for w in np.argmax(probs, axis=1):
+      w = str(vocab.id_to_word(w))
+      if w == "</S>":
+        break
+      generated_caption += w + " "
+      if w == ".":
+        break
+
+    # Caption to dump and update image ids
+    json_dump.append({"image_id": int(np.sum(image_ids[b])), "caption": generated_caption})
+    tf.logging.info("Progress: %.2f | Caption: %s",
+      (i * image_ids.shape[0] + b)/(num_eval_batches * image_ids.shape[0]),
+      json_dump[-1]["caption"])
+    unique_image_ids.add(image_ids[b])
+
+
 def evaluate_model(sess, model, global_step, summary_writer, summary_op):
   """Computes perplexity-per-word over the evaluation dataset.
 
@@ -79,23 +142,8 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
   summary_str = sess.run(summary_op)
   summary_writer.add_summary(summary_str, global_step)
 
-  if not os.path.isfile(model.config.generality_heuristic_file):
-    # Update the word heuristic file using the model
-    heuristic_dump = []
-    for w in range(model.config.vocab_size):
-      calculated_heuristic = sess.run(
-        model.calculated_heuristic,
-        feed_dict={model.heuristic_feed: [w]})
-      heuristic_dump.append(calculated_heuristic[0])
-
-    # Center and scale the heuristic
-    heuristic_dump = np.array(heuristic_dump)
-    heuristic_dump = heuristic_dump - heuristic_dump.min()
-    heuristic_dump = heuristic_dump / heuristic_dump.max()
-    np.savetxt(model.config.generality_heuristic_file, heuristic_dump)
-    tf.logging.info("Finished calculating word heuristics.")
-  else:
-    tf.logging.info("Skipping existing word heuristics.")
+  # Generate a new heuristic file
+  maybe_update_heuristic(sess, model)
 
   # Collect a single instance of model data
   single_indicator_data = {
@@ -112,7 +160,6 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
     "softmax": None}
 
   time_now = int(time.time())
-
   json_dump = []
   vocab = vocabulary.Vocabulary(FLAGS.vocab_file)
 
@@ -188,22 +235,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
           pkl.dump(single_indicator_data, f)
 
           # Collect predicted captions and image ids for evaluation
-          generated_caption = ""
-          for w in np.argmax(single_indicator_data["softmax"], axis=1):
-            w = str(vocab.id_to_word(w))
-            if w == "</S>":
-              break
-            generated_caption += w + " "
-            if w == ".":
-              break
-
-          # Use caption only if id is unique
-          if image_ids[b] not in unique_image_ids:
-            json_dump.append({"image_id": int(np.sum(image_ids[b])), "caption": generated_caption})
-            tf.logging.info("Progress: %.2f | Caption: %s", 
-              (i * images.shape[0] + b)/(num_eval_batches * images.shape[0]), 
-              json_dump[-1]["caption"])
-            unique_image_ids.add(image_ids[b])
+          check_add_caption(single_indicator_data["softmax"], vocab, image_ids, unique_image_ids, i, b, json_dump, num_eval_batches)
 
   # Output a temporary results file for evaluation
   with open(
@@ -211,20 +243,8 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
       "w") as f:
     json.dump(json_dump, f)
 
-  # Evaluate the results file
-  coco = COCO(FLAGS.annotations_file)
-  cocoRes = coco.loadRes(FLAGS.eval_dir + "results." + str(time_now) + ".json")
-  cocoEval = COCOEvalCap(coco, cocoRes)
-  cocoEval.params['image_id'] = cocoRes.getImgIds()
-  cocoEval.evaluate()
-
-  # Dump the results to a metrics file
-  with open(
-      FLAGS.eval_dir + "metrics." + str(time_now) + ".json",
-      "w") as f:
-    metrics_dump = {metric: float(np.sum(score)) for metric, score in cocoEval.eval.items()}
-    metrics_dump["global_step"] = int(np.sum(global_step))
-    json.dump(metrics_dump, f)
+  # Evaluate the performance
+  coco_get_metrics(time_now, global_step)  
 
   sum_losses += np.sum(cross_entropy_losses * weights)
   sum_weights += np.sum(weights)
