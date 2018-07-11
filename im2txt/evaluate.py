@@ -31,6 +31,7 @@ import json
 import pickle as pkl
 import numpy as np
 import tensorflow as tf
+import glove.utils
 
 from im2txt import configuration
 from im2txt import show_and_tell_model
@@ -104,22 +105,26 @@ def coco_get_metrics(time_now, global_step):
     json.dump(metrics_dump, f)
 
 
+def ids_to_sentence(word_ids, vocab):
+  """Convert sequence of ids to a sentence using thsi vocab.
+  """
+  generated_caption = ""
+  for w in word_ids:
+    w = str(vocab.id_to_word(w))
+    if w == "</S>":
+      break
+    generated_caption += w + " "
+    if w == ".":
+      break
+  return generated_caption
+
+
 def check_add_caption(probs, vocab, image_ids, unique_image_ids, i, b, json_dump, num_eval_batches):
   """Check whether the caption is unique and add to dump.
   """
   if image_ids[b] not in unique_image_ids:
-    # Collect predicted captions and image ids for evaluation
-    generated_caption = ""
-    for w in np.argmax(probs, axis=1):
-      w = str(vocab.id_to_word(w))
-      if w == "</S>":
-        break
-      generated_caption += w + " "
-      if w == ".":
-        break
-
     # Caption to dump and update image ids
-    json_dump.append({"image_id": int(np.sum(image_ids[b])), "caption": generated_caption})
+    json_dump.append({"image_id": int(np.sum(image_ids[b])), "caption": ids_to_sentence(np.argmax(probs, axis=1), vocab)})
     tf.logging.info("Progress: %.2f | Caption: %s",
       (i * image_ids.shape[0] + b)/(num_eval_batches * image_ids.shape[0]),
       json_dump[-1]["caption"])
@@ -161,7 +166,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
 
   time_now = int(time.time())
   json_dump = []
-  vocab = vocabulary.Vocabulary(FLAGS.vocab_file)
+  vocab = glove.utils.load()[0]
 
   # Open the file to dump data into
   with open(
@@ -230,6 +235,9 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
           single_indicator_data["target_seqs"] = target_seqs[b, :]
           single_indicator_data["input_mask"] = input_mask[b, :]
           single_indicator_data["softmax"] = softmax[start_slice:end_slice, :]
+
+          # Sanity check for mscoco
+          tf.logging.info("Target caption: %s", ids_to_sentence(single_indicator_data["target_seqs"], vocab))
 
           # Save the indicator using pickle
           pkl.dump(single_indicator_data, f)

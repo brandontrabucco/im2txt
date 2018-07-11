@@ -27,6 +27,7 @@ from __future__ import print_function
 import tensorflow as tf
 import numpy as np
 import os.path
+import glove.utils
 
 from im2txt.ops import image_embedding
 from im2txt.ops import image_processing
@@ -299,8 +300,8 @@ class ShowAndTellModel(object):
 
       embedding_map = tf.get_variable(
           name="map",
-          shape=[self.config.vocab_size, self.config.embedding_size],
-          initializer=self.initializer)
+          initializer=tf.constant(glove.utils.load()[1], dtype=tf.float32),
+          trainable=self.config.train_embeddings)
       seq_embeddings = tf.nn.embedding_lookup(embedding_map, self.input_seqs)
       wikipedia_embeddings = tf.nn.embedding_lookup(embedding_map, self.wikipedia_input_seqs)
 
@@ -450,7 +451,7 @@ class ShowAndTellModel(object):
     Outputs:
       self.total_loss
       self.target_cross_entropy_losses
-      self.target)cross_entropy_loss_weights
+      self.target_cross_entropy_loss_weights
     """
     if self.mode != "inference":
       mscoco_targets = tf.reshape(self.target_seqs, [-1])
@@ -471,18 +472,18 @@ class ShowAndTellModel(object):
                                                                         logits=self.wikipedia_logits)
       wikipedia_loss = tf.div(tf.reduce_sum(tf.multiply(wikipedia_losses, wikipedia_weights)),
                               tf.reduce_sum(wikipedia_weights),
-                              name="wikipedia_loss")
+                              name="wikipedia_loss") * self.config.weight_wikipedia
       tf.losses.add_loss(wikipedia_loss)
 
       # Calculate heuristic reward for sampled words on mscoco
-      mscoco_heuristic = tf.div(
+      mscoco_heuristic = self.config.weight_generality_heuristic * tf.div(
         tf.reduce_sum(tf.reduce_sum(
           self.mscoco_outputs * self.generality_table,
           axis=1) * mscoco_weights), tf.reduce_sum(mscoco_weights), name="mscoco_heuristic")
       tf.losses.add_loss(mscoco_heuristic)
 
       # Calculate heuristic reward for sampled words on wikipedia
-      wikipedia_heuristic = tf.div(
+      wikipedia_heuristic = self.config.weight_wikipedia * self.config.weight_generality_heuristic * tf.div(
         tf.reduce_sum(tf.reduce_sum(
           self.wikipedia_outputs * self.generality_table,
           axis=1) * wikipedia_weights), tf.reduce_sum(wikipedia_weights), name="wikipedia_heuristic")

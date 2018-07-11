@@ -51,7 +51,7 @@ class ModelConfig(object):
     # for differences between tokenizer versions used in preprocessing. There is
     # no harm in using a value greater than the actual vocab size, but using a
     # value less than the actual vocab size will result in an error.
-    self.vocab_size = 60000
+    self.vocab_size = 70000
 
     # Number of threads for image preprocessing. Should be a multiple of 2.
     self.num_preprocess_threads = 4
@@ -72,14 +72,20 @@ class ModelConfig(object):
     self.initializer_scale = 0.08
 
     # LSTM input and output dimensionality, respectively.
-    self.embedding_size = 512
-    self.num_lstm_units = 512
+    self.embedding_size = 300
+    self.num_lstm_units = 300
 
     # If < 1.0, the dropout keep probability applied to LSTM variables.
     self.lstm_dropout_keep_prob = 0.7
 
+    # Should we fine tune the glove embeddings, etc.
+    self.train_embeddings = False
+
+    # Weights given to wikipedia and generality in loss
+    self.weight_generality_heuristic = 0.0
+    self.weight_wikipedia = 0.0
+
     # Generality heuristic parameters
-    self.use_generality_heuristic = False
     self.generality_heuristic_samples = 100
     self.generality_heuristic_file = "/pylon5/ir5fp2p/trabucco/research/ckpts/im2txt/eval/generality.heuristic.csv"
 
