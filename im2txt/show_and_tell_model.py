@@ -139,8 +139,8 @@ class ShowAndTellModel(object):
       wikipedia_input_seqs = None
       wikipedia_target_seqs = None
       wikipedia_mask = None
-      wikipedia_article_id = None
-      wikipedia_sentence_id = None
+      wikipedia_article_ids = None
+      wikipedia_sentence_ids = None
 
     else:
       # Prefetch serialized SequenceExample protos.
@@ -303,7 +303,11 @@ class ShowAndTellModel(object):
           initializer=tf.constant(glove.utils.load()[1], dtype=tf.float32),
           trainable=self.config.train_embeddings)
       seq_embeddings = tf.nn.embedding_lookup(embedding_map, self.input_seqs)
-      wikipedia_embeddings = tf.nn.embedding_lookup(embedding_map, self.wikipedia_input_seqs)
+
+      if self.mode == "inference":
+        wikipedia_embeddings = None
+      else:
+        wikipedia_embeddings = tf.nn.embedding_lookup(embedding_map, self.wikipedia_input_seqs)
 
     self.embedding_map = embedding_map
     self.seq_embeddings = seq_embeddings
@@ -412,29 +416,43 @@ class ShowAndTellModel(object):
                                             initial_state=initial_state,
                                             dtype=tf.float32,
                                             scope=lstm_scope)
+        # Stack batches vertically.
+        mscoco_hidden = tf.reshape(mscoco_hidden, [-1, lstm_cell.output_size])
 
-        # Run the LSTM on wikipedia
-        wikipedia_length = tf.reduce_sum(self.wikipedia_mask, 1)
-        wikipedia_hidden, _ = tf.nn.dynamic_rnn(cell=lstm_cell,
-                                            inputs=self.wikipedia_embeddings,
-                                            sequence_length=wikipedia_length,
-                                            initial_state=zero_state,
-                                            dtype=tf.float32,
-                                            scope=lstm_scope)
+        if self.mode == "inference":
+          wikipedia_hidden = None
+        else:
+          # Run the LSTM on wikipedia.
+          wikipedia_length = tf.reduce_sum(self.wikipedia_mask, 1)
+          wikipedia_hidden, _ = tf.nn.dynamic_rnn(cell=lstm_cell,
+                                                  inputs=self.wikipedia_embeddings,
+                                                  sequence_length=wikipedia_length,
+                                                  initial_state=zero_state,
+                                                  dtype=tf.float32,
+                                                  scope=lstm_scope)
+          # Stack batches vertically.
+          wikipedia_hidden = tf.reshape(wikipedia_hidden, [-1, lstm_cell.output_size])
 
-    # Stack batches vertically.
-    mscoco_hidden = tf.reshape(mscoco_hidden, [-1, lstm_cell.output_size])
-    wikipedia_hidden = tf.reshape(wikipedia_hidden, [-1, lstm_cell.output_size])
-
-    # Note 2018.07.06: Removed additional separate fully connected layer
+    # Compute the probabilities.
     with tf.variable_scope("logits"):
-      mscoco_logits = tf.tensordot(mscoco_hidden, tf.transpose(self.embedding_map), 1)
-      wikipedia_logits = tf.tensordot(wikipedia_hidden, tf.transpose(self.embedding_map), 1)
 
-    self.mscoco_logits = mscoco_logits
-    self.wikipedia_logits = wikipedia_logits
-    self.mscoco_outputs = tf.nn.softmax(mscoco_logits, name="mscoco_softmax")
-    self.wikipedia_outputs = tf.nn.softmax(wikipedia_logits, name="wikipedia_softmax")
+      # Build the inverse parameters.
+      logits_weights = tf.get_variable(name="inverse_map_weights",
+        initializer=tf.constant(glove.utils.load()[1].T, dtype=tf.float32))
+      logits_biases = tf.get_variable(name="inverse_map_biases", 
+        shape=[self.config.vocab_size], initializer=tf.zeros_initializer())  
+
+      # Calculate mscoco logits.
+      self.mscoco_logits = tf.tensordot(mscoco_hidden, logits_weights, 1) + logits_biases
+      self.mscoco_outputs = tf.nn.softmax(self.mscoco_logits, name="mscoco_softmax")
+
+      # Calculate wikipedia logits.
+      if self.mode == "inference":
+        self.wikipedia_logits = None
+        self.wikipedia_outputs = None
+      else:
+        self.wikipedia_logits = tf.tensordot(wikipedia_hidden, logits_weights, 1) + logits_biases
+        self.wikipedia_outputs = tf.nn.softmax(self.wikipedia_logits, name="wikipedia_softmax")
 
   def build_losses(self):
     """Builds the losses on which to optimize the model.

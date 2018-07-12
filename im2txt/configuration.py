@@ -83,7 +83,7 @@ class ModelConfig(object):
 
     # Weights given to wikipedia and generality in loss
     self.weight_generality_heuristic = 0.0
-    self.weight_wikipedia = 0.0
+    self.weight_wikipedia = 1.0
 
     # Generality heuristic parameters
     self.generality_heuristic_samples = 100

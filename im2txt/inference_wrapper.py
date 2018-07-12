@@ -43,7 +43,7 @@ class InferenceWrapper(inference_wrapper_base.InferenceWrapperBase):
 
   def inference_step(self, sess, input_feed, state_feed):
     softmax_output, state_output = sess.run(
-        fetches=["softmax:0", "lstm/state:0"],
+        fetches=["logits/mscoco_softmax:0", "lstm/state:0"],
         feed_dict={
             "input_feed:0": input_feed,
             "lstm/state_feed:0": state_feed,
