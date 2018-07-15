@@ -27,14 +27,13 @@ import tensorflow as tf
 from im2txt import configuration
 from im2txt import inference_wrapper
 from im2txt.inference_utils import caption_generator
-from im2txt.inference_utils import vocabulary
+import glove
 
 FLAGS = tf.flags.FLAGS
 
 tf.flags.DEFINE_string("checkpoint_path", "",
                        "Model checkpoint file or directory containing a "
                        "model checkpoint file.")
-tf.flags.DEFINE_string("vocab_file", "", "Text file containing the vocabulary.")
 tf.flags.DEFINE_string("input_files", "",
                        "File pattern or comma-separated list of file patterns "
                        "of image files.")
@@ -52,7 +51,7 @@ def main(_):
   g.finalize()
 
   # Create the vocabulary.
-  vocab = vocabulary.Vocabulary(FLAGS.vocab_file)
+  vocab = glove.load(model.config.config)[0]
 
   filenames = []
   for file_pattern in FLAGS.input_files.split(","):

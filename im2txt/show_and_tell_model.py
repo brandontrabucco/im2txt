@@ -272,7 +272,7 @@ class ShowAndTellModel(object):
     context_tensor = tf.reduce_mean(inception_output, axis=[1, 2])
 
     # Map inception output into embedding space.
-    with tf.variable_scope("image_embedding"), tf.device("/cpu:0"):
+    with tf.variable_scope("image_embedding"):
 
       image_embedding_map = tf.get_variable(
           name="image_map",
@@ -300,7 +300,7 @@ class ShowAndTellModel(object):
 
       embedding_map = tf.get_variable(
           name="map",
-          initializer=tf.constant(glove.utils.load()[1], dtype=tf.float32),
+          initializer=tf.constant(glove.load(self.config.config)[1], dtype=tf.float32),
           trainable=self.config.train_embeddings)
       seq_embeddings = tf.nn.embedding_lookup(embedding_map, self.input_seqs)
 
@@ -312,47 +312,6 @@ class ShowAndTellModel(object):
     self.embedding_map = embedding_map
     self.seq_embeddings = seq_embeddings
     self.wikipedia_embeddings = wikipedia_embeddings
-
-  def build_heuristic(self):
-    """Builds heuristic calculation from vocabulary.
-    
-    Outputs:
-      self.heuristic_feed
-      self.calculated_heuristic
-      self.generality_table
-    """
-    if self.mode  == "inference":
-      generality_table = None
-      heuristic_feed = None
-      calculated_heuristic = None
-    
-    else:
-      # Load the generality heiristic table
-      if not os.path.isfile(self.config.generality_heuristic_file):
-        np.savetxt(self.config.generality_heuristic_file, np.zeros([self.config.vocab_size]))
-      generality_table = np.loadtxt(self.config.generality_heuristic_file)
-      generality_table = generality_table[np.newaxis, :]
-      generality_table = tf.constant(generality_table, dtype=tf.float32)
-
-      # Calculate the estimated embedding density
-      heuristic_feed = tf.placeholder(dtype=tf.int32, shape=[None], name="heuristic_feed")
-      vocab_embedded = tf.nn.embedding_lookup(self.embedding_map, tf.range(self.config.vocab_size))
-      heuristic_embedded = tf.nn.embedding_lookup(self.embedding_map, heuristic_feed)
-
-      # Calculate distance between word embeddings
-      # Sum for k closest neighbors
-      vocab_distances = tf.norm(
-        tf.expand_dims(vocab_embedded, axis=0) -
-        tf.expand_dims(heuristic_embedded, axis=1),
-        axis=2)
-      vocab_best_values, vocab_best_indices = tf.nn.top_k(
-        -vocab_distances,
-        k=self.config.generality_heuristic_samples)
-      calculated_heuristic = tf.reduce_sum(vocab_best_values, axis=1)
-
-    self.generality_table = generality_table
-    self.heuristic_feed = heuristic_feed
-    self.calculated_heuristic = calculated_heuristic
 
   def build_lstm(self):
     """Builds the model.
@@ -405,7 +364,7 @@ class ShowAndTellModel(object):
             state=state_tuple)
 
         # Concatentate the resulting state.
-        tf.concat(axis=1, values=state_tuple, name="state")
+        tf.concat(axis=1, values=state_tuple, name="state") 
 
       else:
         # Run the batch of sequence embeddings through the LSTM.
@@ -438,7 +397,7 @@ class ShowAndTellModel(object):
 
       # Build the inverse parameters.
       logits_weights = tf.get_variable(name="inverse_map_weights",
-        initializer=tf.constant(glove.utils.load()[1].T, dtype=tf.float32))
+        initializer=tf.constant(glove.load(self.config.config)[1].T, dtype=tf.float32))
       logits_biases = tf.get_variable(name="inverse_map_biases", 
         shape=[self.config.vocab_size], initializer=tf.zeros_initializer())  
 
@@ -453,6 +412,24 @@ class ShowAndTellModel(object):
       else:
         self.wikipedia_logits = tf.tensordot(wikipedia_hidden, logits_weights, 1) + logits_biases
         self.wikipedia_outputs = tf.nn.softmax(self.wikipedia_logits, name="wikipedia_softmax")
+
+  def build_heuristic(self):
+    """Builds heuristic calculation from vocabulary.
+    
+    Outputs:
+      self.generality_table
+    """
+    if self.mode  == "inference":
+      generality_table = None
+    
+    else:
+      # Load the generality heiristic table
+      if not os.path.isfile(self.config.generality_heuristic_file):
+        np.savetxt(self.config.generality_heuristic_file, np.zeros([self.config.vocab_size]))
+      generality_table = np.loadtxt(self.config.generality_heuristic_file)
+      generality_table = generality_table[np.newaxis, :]
+      generality_table = tf.constant(generality_table, dtype=tf.float32)
+    self.generality_table = generality_table
 
   def build_losses(self):
     """Builds the losses on which to optimize the model.
@@ -556,3 +533,4 @@ class ShowAndTellModel(object):
     self.build_losses()
     self.setup_inception_initializer()
     self.setup_global_step()
+

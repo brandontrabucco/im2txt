@@ -103,3 +103,4 @@ def inception_v3(images,
       tf.contrib.layers.summaries.summarize_activation(v)
 
   return net
+  #return end_points["Mixed_7c"], end_points["Predictions"]

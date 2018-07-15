@@ -31,7 +31,8 @@ import json
 import pickle as pkl
 import numpy as np
 import tensorflow as tf
-import glove.utils
+import glove.configuration
+import glove
 
 from im2txt import configuration
 from im2txt import show_and_tell_model
@@ -64,26 +65,13 @@ tf.flags.DEFINE_integer("dumps_per_eval", 100,
 tf.logging.set_verbosity(tf.logging.INFO)
 
 
-def maybe_update_heuristic(sess, model):
-  """Compute the generality heuristic of the vocab.
-  """
-  if not os.path.isfile(model.config.generality_heuristic_file):
-    # Update the word heuristic file using the model
-    heuristic_dump = []
-    for w in range(model.config.vocab_size):
-      calculated_heuristic = sess.run(
-        model.calculated_heuristic,
-        feed_dict={model.heuristic_feed: [w]})
-      heuristic_dump.append(calculated_heuristic[0])
- 
-    # Center and scale the heuristic
-    heuristic_dump = np.array(heuristic_dump)
-    heuristic_dump = heuristic_dump - heuristic_dump.min()
-    heuristic_dump = heuristic_dump / heuristic_dump.max()
-    np.savetxt(model.config.generality_heuristic_file, heuristic_dump)
-    tf.logging.info("Finished calculating word heuristics.")
-  else:
-    tf.logging.info("Skipping existing word heuristics.") 
+config = glove.configuration.Configuration(
+    embedding=300,
+    filedir="/pylon5/ir5fp2p/trabucco/research/ckpts/glove/embeddings/",
+    length=70000,
+    start_word="<S>",
+    end_word="</S>",
+    unk_word="<UNK>")
 
 
 def coco_get_metrics(time_now, global_step):
@@ -146,10 +134,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
   # Log model summaries on a single batch.
   summary_str = sess.run(summary_op)
   summary_writer.add_summary(summary_str, global_step)
-
-  # Generate a new heuristic file
-  maybe_update_heuristic(sess, model)
-
+  
   # Collect a single instance of model data
   single_indicator_data = {
     "global_step": 0,
@@ -166,7 +151,7 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
 
   time_now = int(time.time())
   json_dump = []
-  vocab = glove.utils.load()[0]
+  vocab = glove.load(model.config.config)[0]
 
   # Open the file to dump data into
   with open(

@@ -20,6 +20,9 @@ from __future__ import division
 from __future__ import print_function
 
 
+import glove.configuration
+
+
 class ModelConfig(object):
   """Wrapper class for model hyperparameters."""
 
@@ -96,6 +99,16 @@ class ModelConfig(object):
     self.title_feature_name = "sentence/article_title_ids"
     self.sentence_feature_name = "sentence/sentence_words_ids"
     self.values_per_wikipedia_shard = 83000
+
+    # The config params for loading the vocab and embedding
+    self.config = glove.configuration.Configuration(
+        embedding=300,
+        filedir="/pylon5/ir5fp2p/trabucco/research/ckpts/glove/embeddings/",
+        length=70000,
+        start_word="<S>",
+        end_word="</S>",
+        unk_word="<UNK>")
+
    
 
 class TrainingConfig(object):
