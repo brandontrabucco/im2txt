@@ -48,7 +48,7 @@ def run_caption(encoded_image):
   g.finalize()
 
   # Create the vocabulary.
-  vocab = glove.load(model.config.config)[0]
+  vocab = glove.load(configuration.ModelConfig().config)[0]
 
   with tf.Session(graph=g) as sess:
     # Load the model from checkpoint.
