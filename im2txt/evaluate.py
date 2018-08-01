@@ -36,7 +36,6 @@ import glove
 
 from im2txt import configuration
 from im2txt import show_and_tell_model
-from im2txt.inference_utils import vocabulary
 from pycocoapi.coco import COCO
 from pycocoapi.eval import COCOEvalCap
 
@@ -48,9 +47,10 @@ tf.flags.DEFINE_string("wikipedia_file_pattern", "",
                        "File pattern of sharded TFRecord wikipedia files.")
 tf.flags.DEFINE_string("checkpoint_dir", "",
                        "Directory containing model checkpoints.")
-tf.flags.DEFINE_string("eval_dir", "", "Directory to write event logs.")
-tf.flags.DEFINE_string("vocab_file", "", "The word_counts.txt for the COCO dataset.")
-tf.flags.DEFINE_string("annotations_file", "", "The captions annotations json file.")
+tf.flags.DEFINE_string("eval_dir", "", 
+                       "Directory to write event logs.")
+tf.flags.DEFINE_string("annotations_file", "", 
+                       "The captions annotations json file.")
 
 tf.flags.DEFINE_integer("eval_interval_secs", 1800,
                         "Interval between evaluation runs.")
@@ -59,300 +59,236 @@ tf.flags.DEFINE_integer("num_eval_examples", 10132,
 
 tf.flags.DEFINE_integer("min_global_step", 0,
                         "Minimum global step to run evaluation.")
-tf.flags.DEFINE_integer("dumps_per_eval", 100, 
-                        "Number of times to write to dump file per eval")
+tf.flags.DEFINE_integer("max_eval_batches", 10,
+                        "Maximum number batches to run evaluation.")
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
 
-config = glove.configuration.Configuration(
-    embedding=300,
-    filedir="/pylon5/ir5fp2p/trabucco/research/ckpts/glove/embeddings/",
-    length=70000,
-    start_word="<S>",
-    end_word="</S>",
-    unk_word="<UNK>")
+def coco_get_metrics(time_now, global_step, json_dump):
+    """Get the performance metrics on the dataset.
+    """
+    
+    # Output a temporary results file for evaluation
+    with open(
+            os.path.join(FLAGS.eval_dir, "results." + str(time_now) + ".json"), 
+            "w") as f:
+        json.dump(json_dump, f)
+    
+    # Evaluate the results file
+    coco = COCO(FLAGS.annotations_file)
+    cocoRes = coco.loadRes(os.path.join(FLAGS.eval_dir, "results." + str(time_now) + ".json"))
+    cocoEval = COCOEvalCap(coco, cocoRes)
+    cocoEval.params['image_id'] = cocoRes.getImgIds()
+    cocoEval.evaluate()
 
-
-def coco_get_metrics(time_now, global_step):
-  """Get the performance metrics on the dataset.
-  """
-  # Evaluate the results file
-  coco = COCO(FLAGS.annotations_file)
-  cocoRes = coco.loadRes(FLAGS.eval_dir + "results." + str(time_now) + ".json")
-  cocoEval = COCOEvalCap(coco, cocoRes)
-  cocoEval.params['image_id'] = cocoRes.getImgIds()
-  cocoEval.evaluate()
-
-  # Dump the results to a metrics file
-  with open(
-      FLAGS.eval_dir + "metrics." + str(time_now) + ".json",
-      "w") as f:
-    metrics_dump = {metric: float(np.sum(score)) for metric, score in cocoEval.eval.items()}
-    metrics_dump["global_step"] = int(np.sum(global_step))
-    json.dump(metrics_dump, f)
+    # Dump the results to a metrics file
+    with open(
+            os.path.join(FLAGS.eval_dir, "metrics." + str(time_now) + ".json"),
+            "w") as f:
+        metrics_dump = {metric: float(np.sum(score)) for metric, score in cocoEval.eval.items()}
+        metrics_dump["global_step"] = int(np.sum(global_step))
+        json.dump(metrics_dump, f)
+        
+    return metrics_dump
 
 
 def ids_to_sentence(word_ids, vocab):
-  """Convert sequence of ids to a sentence using thsi vocab.
-  """
-  generated_caption = ""
-  for w in word_ids:
-    w = str(vocab.id_to_word(w))
-    if w == "</S>":
-      break
-    generated_caption += w + " "
-    if w == ".":
-      break
-  return generated_caption
-
-
-def check_add_caption(probs, vocab, image_ids, unique_image_ids, i, b, json_dump, num_eval_batches):
-  """Check whether the caption is unique and add to dump.
-  """
-  if image_ids[b] not in unique_image_ids:
-    # Caption to dump and update image ids
-    json_dump.append({"image_id": int(np.sum(image_ids[b])), "caption": ids_to_sentence(np.argmax(probs, axis=1), vocab)})
-    tf.logging.info("Progress: %.2f | Caption: %s",
-      (i * image_ids.shape[0] + b)/(num_eval_batches * image_ids.shape[0]),
-      json_dump[-1]["caption"])
-    unique_image_ids.add(image_ids[b])
+    """Convert sequence of ids to a sentence using thsi vocab.
+    """
+    generated_caption = ""
+    for w in word_ids:
+        
+        w = str(vocab.id_to_word(w))
+        if w == "</S>":
+            break
+            
+        generated_caption += w + " "
+        if w == ".":
+            break
+            
+    return generated_caption
 
 
 def evaluate_model(sess, model, global_step, summary_writer, summary_op):
-  """Computes perplexity-per-word over the evaluation dataset.
+    """Computes perplexity-per-word over the evaluation dataset.
 
-  Summaries and perplexity-per-word are written out to the eval directory.
+    Summaries and perplexity-per-word are written out to the eval directory.
 
-  Args:
-    sess: Session object.
-    model: Instance of ShowAndTellModel; the model to evaluate.
-    global_step: Integer; global step of the model checkpoint.
-    summary_writer: Instance of FileWriter.
-    summary_op: Op for generating model summaries.
-  """
-  # Log model summaries on a single batch.
-  summary_str = sess.run(summary_op)
-  summary_writer.add_summary(summary_str, global_step)
-  
-  # Collect a single instance of model data
-  single_indicator_data = {
-    "global_step": 0,
-    "losses": None,
-    "weights": None,
-    "images": None,
-    "image_ids": None,
-    "inception": None,
-    "context": None,
-    "input_seqs": None,
-    "target_seqs": None,
-    "input_mask": None,
-    "softmax": None}
+    Args:
+        sess: Session object.
+        model: Instance of ShowAndTellModel; the model to evaluate.
+        global_step: Integer; global step of the model checkpoint.
+        summary_writer: Instance of FileWriter.
+        summary_op: Op for generating model summaries.
+    """
+    # Log model summaries on a single batch.
+    summary_str = sess.run(summary_op)
+    summary_writer.add_summary(summary_str, global_step)
 
-  time_now = int(time.time())
-  json_dump = []
-  vocab = glove.load(model.config.config)[0]
-
-  # Open the file to dump data into
-  with open(
-      FLAGS.eval_dir + ("dump." + str(time_now) + ".pkl"),
-      "wb") as f:
+    time_now = int(time.time())
+    vocab = glove.load(model.config.config)[0]
 
     # Compute perplexity over the entire dataset.
-    num_eval_batches = int(
-        math.ceil(FLAGS.num_eval_examples / model.config.batch_size))
+    num_eval_batches = min(FLAGS.max_eval_batches, int(
+        math.ceil(FLAGS.num_eval_examples / model.config.batch_size)))
 
     start_time = time.time()
     sum_losses = 0.
     sum_weights = 0.
 
     unique_image_ids = set()
+    json_dump = []
 
     for i in range(num_eval_batches):
-
-      (global_step,
-        cross_entropy_losses, 
-        weights,
-        images,
-        image_ids,
-        inception,
-        context,
-        input_seqs,
-        target_seqs,
-        input_mask,
-        softmax) = sess.run([
-          model.global_step,
-          model.target_cross_entropy_losses,
-          model.target_cross_entropy_loss_weights,
-          model.images,
-          model.image_ids,
-          model.inception_output,
-          model.image_embeddings,
-          model.input_seqs,
-          model.target_seqs,
-          model.input_mask,
-          model.mscoco_outputs
-      ])
-
-      # For each element of the batch write to file
-      for b in range(images.shape[0]):
-
-        if (i * images.shape[0] + b) % (num_eval_batches 
-            * images.shape[0] // FLAGS.dumps_per_eval) == 0:
         
-          # Calculate start and end slices for vertically stacked batches
-          start_slice = b * target_seqs.shape[1]
-          end_slice = (b+1) * target_seqs.shape[1]
+        tf.logging.info("Starting beam_search on batch %d", i)
+        (global_step,
+            images,
+            image_ids,
+            target_seqs,
+            final_seqs) = sess.run([
+                model.global_step,
+                model.images,
+                model.image_ids,
+                model.target_seqs,
+                model.final_seqs
+            ])
+        tf.logging.info("Finishing beam_search on batch %d", i)
 
-          # Catch out of bounds errors when batches are abnormally small
-          if weights.shape[0] <= start_slice or weights.shape[0] < end_slice:
-            break
+        # For each element of the batch write to file
+        for b in range(model.config.batch_size):
 
-          # Save each element of the batch
-          single_indicator_data["global_step"] = global_step
-          single_indicator_data["losses"] = cross_entropy_losses[start_slice:end_slice]
-          single_indicator_data["weights"] = weights[start_slice:end_slice]
-          single_indicator_data["images"] = (images[b, :, :, :] - images[b, :, :, :].min())/2.0
-          single_indicator_data["image_ids"] = image_ids[b]
-          single_indicator_data["inception"] = inception[b, :, :, :]
-          single_indicator_data["context"] = context[b, :]
-          single_indicator_data["input_seqs"] = input_seqs[b, :]
-          single_indicator_data["target_seqs"] = target_seqs[b, :]
-          single_indicator_data["input_mask"] = input_mask[b, :]
-          single_indicator_data["softmax"] = softmax[start_slice:end_slice, :]
+            # Save each element of the batch
+            single_global_step = global_step
+            single_image = (images[b, :, :, :] - images[b, :, :, :].min())/2.0
+            single_image_id = image_ids[b]
+            single_target_seq = target_seqs[b, :]
+            single_final_seq = final_seqs[b, 0, :]
+            
+            if single_image_id not in unique_image_ids:
+                # Caption to dump and update image ids
+                json_dump.append({"image_id": int(np.sum(single_image_id)), 
+                                  "caption": ids_to_sentence(single_final_seq, vocab)})
+                tf.logging.info("Caption %d of %d: %s", 
+                                i * model.config.batch_size + b,
+                                model.config.batch_size * num_eval_batches,
+                                ids_to_sentence(single_final_seq, vocab))
+                unique_image_ids.add(single_image_id)
+    
+    # Evaluate the performance
+    metrics = coco_get_metrics(time_now, global_step, json_dump)  
+    eval_time = time.time() - start_time
 
-          # Sanity check for mscoco
-          tf.logging.info("Target caption: %s", ids_to_sentence(single_indicator_data["target_seqs"], vocab))
+    # Log perplexity to the FileWriter.
+    summary = tf.Summary()
+    for name, val in metrics.items():
+        value = summary.value.add()
+        value.simple_value = val
+        value.tag = name
+    summary_writer.add_summary(summary, global_step)
 
-          # Save the indicator using pickle
-          pkl.dump(single_indicator_data, f)
-
-          # Collect predicted captions and image ids for evaluation
-          check_add_caption(single_indicator_data["softmax"], vocab, image_ids, unique_image_ids, i, b, json_dump, num_eval_batches)
-
-  # Output a temporary results file for evaluation
-  with open(
-      FLAGS.eval_dir + "results." + str(time_now) + ".json", 
-      "w") as f:
-    json.dump(json_dump, f)
-
-  # Evaluate the performance
-  coco_get_metrics(time_now, global_step)  
-
-  sum_losses += np.sum(cross_entropy_losses * weights)
-  sum_weights += np.sum(weights)
-  if not i % 100:
-    tf.logging.info("Computed losses for %d of %d batches.", i + 1,
-                    num_eval_batches)
-  eval_time = time.time() - start_time
-
-  perplexity = math.exp(sum_losses / sum_weights)
-  tf.logging.info("Perplexity = %f (%.2g sec)", perplexity, eval_time)
-
-  # Log perplexity to the FileWriter.
-  summary = tf.Summary()
-  value = summary.value.add()
-  value.simple_value = perplexity
-  value.tag = "Perplexity"
-  summary_writer.add_summary(summary, global_step)
-
-  # Write the Events file to the eval directory.
-  summary_writer.flush()
-  tf.logging.info("Finished processing evaluation at global step %d.",
-                  global_step)
+    # Write the Events file to the eval directory.
+    summary_writer.flush()
+    tf.logging.info("Finished processing evaluation at global step %d.",
+                    global_step)
 
 
 def run_once(model, saver, summary_writer, summary_op):
-  """Evaluates the latest model checkpoint.
+    """Evaluates the latest model checkpoint.
 
-  Args:
-    model: Instance of ShowAndTellModel; the model to evaluate.
-    saver: Instance of tf.train.Saver for restoring model Variables.
-    summary_writer: Instance of FileWriter.
-    summary_op: Op for generating model summaries.
-  """
-  model_path = tf.train.latest_checkpoint(FLAGS.checkpoint_dir)
-  if not model_path:
-    tf.logging.info("Skipping evaluation. No checkpoint found in: %s",
-                    FLAGS.checkpoint_dir)
-    return
+    Args:
+        model: Instance of ShowAndTellModel; the model to evaluate.
+        saver: Instance of tf.train.Saver for restoring model Variables.
+        summary_writer: Instance of FileWriter.
+        summary_op: Op for generating model summaries.
+    """
+    model_path = tf.train.latest_checkpoint(FLAGS.checkpoint_dir)
+    if not model_path:
+        tf.logging.info("Skipping evaluation. No checkpoint found in: %s",
+                        FLAGS.checkpoint_dir)
+        return
 
-  with tf.Session() as sess:
-    # Load model from checkpoint.
-    tf.logging.info("Loading model from checkpoint: %s", model_path)
-    saver.restore(sess, model_path)
-    global_step = tf.train.global_step(sess, model.global_step.name)
-    tf.logging.info("Successfully loaded %s at global step = %d.",
-                    os.path.basename(model_path), global_step)
-    if global_step < FLAGS.min_global_step:
-      tf.logging.info("Skipping evaluation. Global step = %d < %d", global_step,
-                      FLAGS.min_global_step)
-      return
+    with tf.Session() as sess:
+        # Load model from checkpoint.
+        tf.logging.info("Loading model from checkpoint: %s", model_path)
+        saver.restore(sess, model_path)
+        global_step = tf.train.global_step(sess, model.global_step.name)
+        tf.logging.info("Successfully loaded %s at global step = %d.",
+                        os.path.basename(model_path), global_step)
+        if global_step < FLAGS.min_global_step:
+            tf.logging.info("Skipping evaluation. Global step = %d < %d", global_step,
+                          FLAGS.min_global_step)
+            return
 
-    # Start the queue runners.
-    coord = tf.train.Coordinator()
-    threads = tf.train.start_queue_runners(coord=coord)
+        # Start the queue runners.
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(coord=coord)
 
-    # Run evaluation on the latest checkpoint.
-    try:
-      evaluate_model(
-          sess=sess,
-          model=model,
-          global_step=global_step,
-          summary_writer=summary_writer,
-          summary_op=summary_op)
-    except Exception as e:  # pylint: disable=broad-except
-      tf.logging.error("Evaluation failed.")
-      coord.request_stop(e)
+        # Run evaluation on the latest checkpoint.
+        try:
+            evaluate_model(
+                sess=sess,
+                model=model,
+                global_step=global_step,
+                summary_writer=summary_writer,
+                summary_op=summary_op)
+        except Exception as e:  # pylint: disable=broad-except
+            tf.logging.error("Evaluation failed.")
+            coord.request_stop(e)
 
-    coord.request_stop()
-    coord.join(threads, stop_grace_period_secs=10)
+        try:
+            coord.request_stop()
+            coord.join(threads, stop_grace_period_secs=10)
+        except Exception as e:  # pylint: disable=broad-except
+            tf.logging.error("Failed to shutdown correctly.")
 
 
 def run():
-  """Runs evaluation in a loop, and logs summaries to TensorBoard."""
-  # Create the evaluation directory if it doesn't exist.
-  eval_dir = FLAGS.eval_dir
-  if not tf.gfile.IsDirectory(eval_dir):
-    tf.logging.info("Creating eval directory: %s", eval_dir)
-    tf.gfile.MakeDirs(eval_dir)
+    """Runs evaluation in a loop, and logs summaries to TensorBoard."""
+    # Create the evaluation directory if it doesn't exist.
+    eval_dir = FLAGS.eval_dir
+    if not tf.gfile.IsDirectory(eval_dir):
+        tf.logging.info("Creating eval directory: %s", eval_dir)
+        tf.gfile.MakeDirs(eval_dir)
 
-  g = tf.Graph()
-  with g.as_default():
-    # Build the model for evaluation.
-    model_config = configuration.ModelConfig()
-    model_config.input_file_pattern = FLAGS.input_file_pattern
-    model_config.wikipedia_file_pattern = FLAGS.wikipedia_file_pattern
-    model = show_and_tell_model.ShowAndTellModel(model_config, mode="eval")
-    model.build()
+    g = tf.Graph()
+    with g.as_default():
+        # Build the model for evaluation.
+        model_config = configuration.ModelConfig()
+        model_config.input_file_pattern = FLAGS.input_file_pattern
+        model_config.wikipedia_file_pattern = FLAGS.wikipedia_file_pattern
+        model = show_and_tell_model.ShowAndTellModel(model_config, mode="eval")
+        model.build()
 
-    # Create the Saver to restore model Variables.
-    saver = tf.train.Saver()
+        # Create the Saver to restore model Variables.
+        saver = tf.train.Saver()
 
-    # Create the summary operation and the summary writer.
-    summary_op = tf.summary.merge_all()
-    summary_writer = tf.summary.FileWriter(eval_dir)
+        # Create the summary operation and the summary writer.
+        summary_op = tf.summary.merge_all()
+        summary_writer = tf.summary.FileWriter(eval_dir)
 
-    g.finalize()
+        g.finalize()
 
-    # Run a new evaluation run every eval_interval_secs.
-    while True:
-      start = time.time()
-      tf.logging.info("Starting evaluation at " + time.strftime(
-          "%Y-%m-%d-%H:%M:%S", time.localtime()))
-      run_once(model, saver, summary_writer, summary_op)
-      time_to_next_eval = start + FLAGS.eval_interval_secs - time.time()
-      if time_to_next_eval > 0:
-        time.sleep(time_to_next_eval)
+        # Run a new evaluation run every eval_interval_secs.
+        while True:
+            start = time.time()
+            tf.logging.info("Starting evaluation at " + time.strftime(
+                "%Y-%m-%d-%H:%M:%S", time.localtime()))
+            run_once(model, saver, summary_writer, summary_op)
+            time_to_next_eval = start + FLAGS.eval_interval_secs - time.time()
+            if time_to_next_eval > 0:
+                time.sleep(time_to_next_eval)
 
 
 def main(unused_argv):
-  assert FLAGS.input_file_pattern, "--input_file_pattern is required"
-  assert FLAGS.wikipedia_file_pattern, "--wikipedia_file_pattern is required"
-  assert FLAGS.checkpoint_dir, "--checkpoint_dir is required"
-  assert FLAGS.eval_dir, "--eval_dir is required"
-  run()
+    assert FLAGS.input_file_pattern, "--input_file_pattern is required"
+    assert FLAGS.wikipedia_file_pattern, "--wikipedia_file_pattern is required"
+    assert FLAGS.checkpoint_dir, "--checkpoint_dir is required"
+    assert FLAGS.eval_dir, "--eval_dir is required"
+    assert FLAGS.annotations_file, "--annotations_file is required"
+    run()
 
 
 if __name__ == "__main__":
-  tf.app.run()
+    tf.app.run()

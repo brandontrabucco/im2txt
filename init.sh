@@ -1,11 +1,10 @@
-module load python3/3.4.2
-module load cuda/9.0
-source $SCRATCH/research/envs/im2txt_env/bin/activate
+#!/bin/bash
 
-python3 $SCRATCH/research/repos/im2txt/im2txt/train.py \
---input_file_pattern="$SCRATCH/research/data/coco/train-?????-of-00256" \
---wikipedia_file_pattern="$SCRATCH/research/data/wikipedia/train-?????-of-00256" \
+im2txt_env
+python $SCRATCH/research/repos/im2txt/im2txt/train.py \
+--input_file_pattern="$SCRATCH/research/data/mscoco_dataset/train-?????-of-00256" \
+--wikipedia_file_pattern="$SCRATCH/research/data/wikipedia_dataset/train-?????-of-00256" \
 --inception_checkpoint_file="$SCRATCH/research/ckpts/inception/inception_v3.ckpt" \
 --train_dir="$SCRATCH/research/ckpts/im2txt/train/" \
 --train_inception=false \
---number_of_steps=100000 \
+--number_of_steps=50000 \

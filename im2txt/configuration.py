@@ -61,7 +61,9 @@ class ModelConfig(object):
 
     # Batch size.
     self.batch_size = 32
-
+    self.beam_size = 3
+    self.maximum_iterations = 20
+    
     # File containing an Inception v3 checkpoint to initialize the variables
     # of the Inception model. Must be provided when starting training for the
     # first time.
@@ -85,12 +87,12 @@ class ModelConfig(object):
     self.train_embeddings = False
 
     # Weights given to wikipedia and generality in loss
-    self.weight_generality_heuristic = 0.0
-    self.weight_wikipedia = 1.0
+    self.weight_generality_heuristic = 0.5
+    self.weight_wikipedia = 0.5
 
     # Generality heuristic parameters
     self.generality_heuristic_samples = 100
-    self.generality_heuristic_file = "/pylon5/ir5fp2p/trabucco/research/ckpts/im2txt/eval/generality.heuristic.csv"
+    self.generality_heuristic_file = "/home/ubuntu/research/data/glove/heuristic/heuristic.300d.70000w.20k.txt"
 
     # Wikipedia dataset parameters
     self.wikipedia_file_pattern = None
@@ -100,10 +102,18 @@ class ModelConfig(object):
     self.sentence_feature_name = "sentence/sentence_words_ids"
     self.values_per_wikipedia_shard = 83000
 
+    # Deep fashion dataset loading parameters.
+    self.deepfashion_file_pattern = None
+    self.df_filename_name = "image/filename"
+    self.df_image_name = "image/data"
+    self.df_category_name = "image/category"
+    self.df_attributes_name = "image/attributes"
+    self.values_per_wikipedia_shard = 5000
+
     # The config params for loading the vocab and embedding
     self.config = glove.configuration.Configuration(
         embedding=300,
-        filedir="/pylon5/ir5fp2p/trabucco/research/ckpts/glove/embeddings/",
+        filedir="/home/ubuntu/research/data/glove/embeddings/",
         length=70000,
         start_word="<S>",
         end_word="</S>",

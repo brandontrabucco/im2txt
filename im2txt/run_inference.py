@@ -21,12 +21,11 @@ from __future__ import print_function
 import math
 import os
 
-
+import numpy as np
 import tensorflow as tf
 
 from im2txt import configuration
-from im2txt import inference_wrapper
-from im2txt.inference_utils import caption_generator
+from im2txt import show_and_tell_model
 import glove
 
 FLAGS = tf.flags.FLAGS
@@ -41,44 +40,72 @@ tf.flags.DEFINE_string("input_files", "",
 tf.logging.set_verbosity(tf.logging.INFO)
 
 
+def run_caption(checkpoint_path, filenames):
+    g = tf.Graph()
+    with g.as_default():
+        # Build the model for evaluation.
+        model_config = configuration.ModelConfig()
+        model = show_and_tell_model.ShowAndTellModel(model_config, mode="inference")
+        model.build()
+        # Create the Saver to restore model Variables.
+        saver = tf.train.Saver()
+        g.finalize()
+
+    def _restore_fn(sess):
+        tf.logging.info("Loading model from checkpoint: %s", checkpoint_path)
+        saver.restore(sess, checkpoint_path)
+        tf.logging.info("Successfully loaded checkpoint: %s",
+                        os.path.basename(checkpoint_path))
+        
+    restore_fn = _restore_fn
+
+    # Create the vocabulary.
+    vocab = glove.load(model_config.config)[0]
+
+    run_results = []
+    with tf.Session(graph=g) as sess:
+        # Load the model from checkpoint.
+        restore_fn(sess)
+
+        # Prepare the list of image bytes for evaluation.
+        images = []
+        for filename in filenames:
+            with tf.gfile.GFile(filename, "rb") as f:
+                images.append(f.read())     
+        captions = np.concatenate([sess.run(model.final_seqs, 
+            feed_dict={"image_feed:0": img}) for img in images], axis=0)
+        
+        for i, filename in enumerate(filenames):
+            run_results.append({"filename": filename, "captions": []})
+            for j in range(captions.shape[1]):
+                # Ignore begin and end words.
+                caption = captions[i, j, :]
+                sentence = [vocab.id_to_word(w) for w in caption[1:-1]]
+                sentence = " ".join(sentence)
+                run_results[i]["captions"].append(sentence)
+                
+    return run_results
+
 def main(_):
-  # Build the inference graph.
-  g = tf.Graph()
-  with g.as_default():
-    model = inference_wrapper.InferenceWrapper()
-    restore_fn = model.build_graph_from_config(configuration.ModelConfig(),
-                                               FLAGS.checkpoint_path)
-  g.finalize()
+        
+    if tf.gfile.IsDirectory(FLAGS.checkpoint_path):
+        checkpoint_path = tf.train.latest_checkpoint(FLAGS.checkpoint_path)
+        if not checkpoint_path:
+            raise ValueError("No checkpoint file found in: %s" % FLAGS.checkpoint_path)
+    else:
+        checkpoint_path = FLAGS.checkpoint_path
 
-  # Create the vocabulary.
-  vocab = glove.load(model.config.config)[0]
-
-  filenames = []
-  for file_pattern in FLAGS.input_files.split(","):
-    filenames.extend(tf.gfile.Glob(file_pattern))
-  tf.logging.info("Running caption generation on %d files matching %s",
+    filenames = []
+    for file_pattern in FLAGS.input_files.split(","):
+        filenames.extend(tf.gfile.Glob(file_pattern))
+    tf.logging.info("Running caption generation on %d files matching %s",
                   len(filenames), FLAGS.input_files)
 
-  with tf.Session(graph=g) as sess:
-    # Load the model from checkpoint.
-    restore_fn(sess)
-
-    # Prepare the caption generator. Here we are implicitly using the default
-    # beam search parameters. See caption_generator.py for a description of the
-    # available beam search parameters.
-    generator = caption_generator.CaptionGenerator(model, vocab)
-
-    for filename in filenames:
-      with tf.gfile.GFile(filename, "rb") as f:
-        image = f.read()
-      captions = generator.beam_search(sess, image)
-      print("Captions for image %s:" % os.path.basename(filename))
-      for i, caption in enumerate(captions):
-        # Ignore begin and end words.
-        sentence = [vocab.id_to_word(w) for w in caption.sentence[1:-1]]
-        sentence = " ".join(sentence)
-        print("  %d) %s (p=%f)" % (i, sentence, math.exp(caption.logprob)))
-
+    captions = run_caption(checkpoint_path, filenames)
+    for single_image in captions:
+        print("Captions for image %s:" % os.path.basename(single_image["filename"]))
+        for j, caption in enumerate(single_image["captions"]):
+            print("  %d) %s " % (j, caption))
 
 if __name__ == "__main__":
-  tf.app.run()
+      tf.app.run()
