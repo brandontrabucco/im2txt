@@ -54,6 +54,7 @@ class ShowAndTellModel(object):
         self.config = config
         self.mode = mode
         self.train_inception = train_inception
+        self.use_style = False
 
         # Reader for the input data.
         self.reader = tf.TFRecordReader()
@@ -196,8 +197,8 @@ class ShowAndTellModel(object):
         if self.mode == "inference":
             # In inference mode, images and inputs are fed via placeholders.
             image_feed = tf.placeholder(dtype=tf.string, 
-                                        shape=[], 
-                                        name="image_feed")
+                                    shape=[], 
+                                    name="image_feed")
 
             # Process images.
             images = self.process_image(image_feed)
@@ -298,9 +299,9 @@ class ShowAndTellModel(object):
         with tf.variable_scope("seq_embedding"), tf.device("/cpu:0"):
 
             embedding_map = tf.get_variable(
-                    name="map",
-                    initializer=tf.constant(glove.load(self.config.config)[1], dtype=tf.float32),
-                    trainable=self.config.train_embeddings)
+                name="map",
+                initializer=tf.constant(glove.load(self.config.config)[1], dtype=tf.float32),
+                trainable=self.config.train_embeddings)
 
             if self.mode == "inference":
                 seq_embeddings = None
@@ -324,6 +325,7 @@ class ShowAndTellModel(object):
 
         Outputs:
             self.total_loss (training and eval only)
+            self.initial_state
             self.target_cross_entropy_losses (training and eval only)
             self.target_cross_entropy_loss_weights (training and eval only)
         """
@@ -337,31 +339,19 @@ class ShowAndTellModel(object):
                     lstm_cell,
                     input_keep_prob=self.config.lstm_dropout_keep_prob,
                     output_keep_prob=self.config.lstm_dropout_keep_prob)
+        self.lstm_cell = lstm_cell
             
         # Feed the image embeddings to set the initial LSTM state.
         zero_state = lstm_cell.zero_state(
                 batch_size=self.image_embeddings.get_shape()[0], dtype=tf.float32)
         _, initial_state = lstm_cell(self.image_embeddings, zero_state)
+        self.initial_state = initial_state
             
         probabilities_layer = tf.layers.Dense(
             units=self.config.vocab_size,
             kernel_initializer=tf.constant_initializer(
                 glove.load(self.config.config)[1].T, dtype=tf.float32))
-        
-        # Used for adapting thge probabilities of beam search.
-        class Critic(tf.layers.Layer):
-            
-            def __init__(self, probs_layer, heuristic, ratio):
-                self.probs_layer = probs_layer
-                self.heuristic = heuristic
-                self.ratio = ratio
-                
-            def __call__(self, inputs):
-                return ((self.probs_layer(inputs) * self.ratio) 
-                        + (self.heuristic * (1 - self.ratio)))
-            
-            def compute_output_shape(self, input_shape):
-                return input_shape
+        self.probabilities_layer = probabilities_layer
 
         vocab = glove.load(self.config.config)[0]
 
@@ -371,7 +361,7 @@ class ShowAndTellModel(object):
             tf.fill([self.image_embeddings.get_shape()[0]], vocab.start_id), vocab.end_id,
             tf.contrib.seq2seq.tile_batch(
                 initial_state, multiplier=self.config.beam_size), self.config.beam_size,
-            output_layer=Critic(probabilities_layer, self.generality_table, 1.0))
+            output_layer=probabilities_layer)
             
         (final_outputs, 
             final_state,
@@ -438,11 +428,111 @@ class ShowAndTellModel(object):
         generality_table = generality_table[np.newaxis, :]
 
         # Center between [0, 1]
+        generality_table = generality_table - generality_table.min()
+        generality_table = generality_table / generality_table.max()
         generality_table = tf.constant(generality_table, dtype=tf.float32)
-        generality_table = tf.nn.softmax(generality_table)
-            
         self.generality_table = generality_table
+        
+    def build_attributes(self):
+        """Build the attribute probabilities that will be used to push the outputs of the model.
+        
+        Outputs:
+            self.attribute_probabilities
+        """
+        if self.mode == "inference":
+            attribute_probabilities = tf.placeholder(dtype=tf.float32, 
+                                              shape=[1, self.config.vocab_size], 
+                                              name="attribute_probabilities")
+        else:
+            attribute_probabilities = tf.zeros(shape=[1, self.config.vocab_size], 
+                                               dtype=tf.float32)
+            
+        self.attribute_probabilities = attribute_probabilities
+        
+    def build_stylistic_transfer(self):
+        """Set up the initial state variable and optimizer for style transfer.
+        
+        Outputs:
+            self.assign_initial_states
+            self.style_seqs
+            self.descend_style
+        """
+        if self.use_style:
+            
+            self.model_variables = tf.get_collection(
+                tf.GraphKeys.GLOBAL_VARIABLES)
+            
+            # Build the variable state tuple
+            if self.mode == "inference":
+                initial_state_beam = tf.get_variable(
+                    "initial_state_beam", 
+                    shape=[self.config.beam_size, self.config.embedding_size * 2],
+                    initializer=tf.zeros_initializer())
+            else:
+                initial_state_beam = tf.get_variable(
+                    "initial_state_beam", 
+                    shape=[self.config.beam_size * self.config.batch_size, self.config.embedding_size * 2],
+                    initializer=tf.zeros_initializer())
+            
+            assign_initial_states = tf.assign(initial_state_beam, 
+                tf.concat(tf.contrib.seq2seq.tile_batch(
+                    self.initial_state, multiplier=self.config.beam_size), 1))
+            initial_state_beam_t = tf.split(value=initial_state_beam, 
+                                            num_or_size_splits=2, axis=1)
+            initial_state_beam_t = tf.nn.rnn_cell.LSTMStateTuple(
+                *initial_state_beam_t)
+            
+            self.assign_initial_states = assign_initial_states
+            vocab = glove.load(self.config)[0]
+            
+            decoder = tf.contrib.seq2seq.BeamSearchDecoder(
+                self.lstm_cell, self.embedding_map, 
+                tf.fill([1 if self.mode == "inference" else self.config.batch_size], 
+                        vocab.start_id), vocab.end_id,
+                initial_state_beam_t, self.config.beam_size,
+                output_layer=self.probabilities_layer)
+            (final_outputs, 
+                final_state,
+                final_sequence_lengths) = tf.contrib.seq2seq.dynamic_decode(
+                    decoder, maximum_iterations=self.config.maximum_iterations)
+            
+            final_ids = tf.transpose(final_outputs.predicted_ids, [0, 2, 1])
+            self.style_seqs = final_ids
+            final_ids = tf.reshape(final_ids, 
+                [-1, tf.shape(final_ids)[2]])
+            final_sequence_lengths = tf.reshape(final_sequence_lengths, [-1])
 
+            feed_ids = tf.concat([
+                tf.fill([self.config.beam_size * (1 if self.mode == "inference" 
+                                           else self.config.batch_size), 1], vocab.start_id),
+                final_ids], 1)[:, :-1]
+            feed_embeddings = tf.nn.embedding_lookup(self.embedding_map, feed_ids)
+            beam_probs = tf.nn.softmax(self.probabilities_layer(tf.nn.dynamic_rnn(
+                self.lstm_cell, feed_embeddings,
+                sequence_length=final_sequence_lengths,
+                initial_state=initial_state_beam_t)[0]))
+            
+            # Sum across probabilities, mean across words and batch.
+            heuristic_reward = tf.reduce_mean(tf.reduce_sum(
+                beam_probs * tf.reshape(self.generality_table, [1, 1, self.config.vocab_size]), axis=2))
+            heuristic_penalty = -heuristic_reward
+            self.heuristic_penalty = heuristic_penalty
+            
+            # Sum across probabilities, mean across words and batch.
+            attribute_reward = tf.reduce_mean(tf.reduce_mean(
+                tf.log(beam_probs) * tf.reshape(self.attribute_probabilities, [1, 1, self.config.vocab_size]), axis=2))
+            attribute_penalty = -attribute_reward
+            self.attribute_penalty = attribute_penalty
+            
+            transfer = tf.train.GradientDescentOptimizer(
+                1000.0)
+            t_gradients = transfer.compute_gradients(
+                heuristic_penalty,
+                var_list=[initial_state_beam])
+            t_updates = transfer.apply_gradients(
+                t_gradients)   
+            self.descend_style = t_updates
+            
     def build_losses(self):
         """Builds the losses on which to optimize the model.
         Inputs:
@@ -468,7 +558,7 @@ class ShowAndTellModel(object):
 
             # Compute losses.
             mscoco_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=mscoco_targets,
-                                                                                                                            logits=self.mscoco_logits)
+                                                                           logits=self.mscoco_logits)
             mscoco_loss = tf.div(tf.reduce_sum(tf.multiply(mscoco_losses, mscoco_weights)),
                                                     tf.reduce_sum(mscoco_weights),
                                                     name="batch_loss")
@@ -476,7 +566,7 @@ class ShowAndTellModel(object):
 
             # Compute loss for wikipedia
             wikipedia_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=wikipedia_targets,
-                                                                                                                                                logits=self.wikipedia_logits)
+                                                                              logits=self.wikipedia_logits)
             wikipedia_loss = tf.div(tf.reduce_sum(tf.multiply(wikipedia_losses, wikipedia_weights)),
                                                             tf.reduce_sum(wikipedia_weights),
                                                             name="wikipedia_loss") * self.config.weight_wikipedia
@@ -541,8 +631,10 @@ class ShowAndTellModel(object):
         self.build_image_embeddings()
         self.build_seq_embeddings()
         self.build_heuristic()
+        self.build_attributes()
         self.build_lstm()
         self.build_losses()
         self.setup_inception_initializer()
         self.setup_global_step()
+        self.build_stylistic_transfer()
 

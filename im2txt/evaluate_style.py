@@ -61,6 +61,8 @@ tf.flags.DEFINE_integer("min_global_step", 0,
                         "Minimum global step to run evaluation.")
 tf.flags.DEFINE_integer("max_eval_batches", 10,
                         "Maximum number batches to run evaluation.")
+tf.flags.DEFINE_integer("style_iterations", 20,
+                        "Maximum number batches to run evaluation.")
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -71,20 +73,20 @@ def coco_get_metrics(time_now, global_step, json_dump):
     
     # Output a temporary results file for evaluation
     with open(
-            os.path.join(FLAGS.eval_dir, "results." + str(time_now) + ".json"), 
+            os.path.join(FLAGS.eval_dir, "style.results." + str(time_now) + ".json"), 
             "w") as f:
         json.dump(json_dump, f)
     
     # Evaluate the results file
     coco = COCO(FLAGS.annotations_file)
-    cocoRes = coco.loadRes(os.path.join(FLAGS.eval_dir, "results." + str(time_now) + ".json"))
+    cocoRes = coco.loadRes(os.path.join(FLAGS.eval_dir, "style.results." + str(time_now) + ".json"))
     cocoEval = COCOEvalCap(coco, cocoRes)
     cocoEval.params['image_id'] = cocoRes.getImgIds()
     cocoEval.evaluate()
 
     # Dump the results to a metrics file
     with open(
-            os.path.join(FLAGS.eval_dir, "metrics." + str(time_now) + ".json"),
+            os.path.join(FLAGS.eval_dir, "style.metrics." + str(time_now) + ".json"),
             "w") as f:
         metrics_dump = {metric: float(np.sum(score)) for metric, score in cocoEval.eval.items()}
         metrics_dump["global_step"] = int(np.sum(global_step))
@@ -148,13 +150,17 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
             images,
             image_ids,
             target_seqs,
-            final_seqs) = sess.run([
+            final_seqs, _) = sess.run([
                 model.global_step,
                 model.images,
                 model.image_ids,
                 model.target_seqs,
-                model.final_seqs
+                model.final_seqs,
+                model.assign_initial_states
             ])
+        for x in range(FLAGS.style_iterations):
+            sess.run(model.descend_style)
+        style_seqs = sess.run(model.style_seqs)
         tf.logging.info("Finishing beam_search on batch %d", i)
 
         # For each element of the batch write to file
@@ -166,23 +172,34 @@ def evaluate_model(sess, model, global_step, summary_writer, summary_op):
             single_image_id = image_ids[b]
             single_target_seq = target_seqs[b, :]
             single_final_seq = final_seqs[b, 0, :]
+            single_style_seq = style_seqs[b, 0, :]
             
             comparison_dump.append({"ground_truth": ids_to_sentence(single_target_seq, vocab),
-                                    "caption": ids_to_sentence(single_final_seq, vocab)})
+                                    "original": ids_to_sentence(single_final_seq, vocab),
+                                    "styled": ids_to_sentence(single_style_seq, vocab)})
             
             if single_image_id not in unique_image_ids:
                 # Caption to dump and update image ids
                 json_dump.append({"image_id": int(np.sum(single_image_id)), 
-                                  "caption": ids_to_sentence(single_final_seq, vocab)})
-                tf.logging.info("Caption %d of %d: %s", 
+                                  "caption": ids_to_sentence(single_style_seq, vocab)})
+                
+                tf.logging.info("Ground Truth %d of %d: %s", 
+                                i * model.config.batch_size + b,
+                                model.config.batch_size * num_eval_batches,
+                                ids_to_sentence(single_target_seq, vocab))
+                tf.logging.info("Original %d of %d: %s", 
                                 i * model.config.batch_size + b,
                                 model.config.batch_size * num_eval_batches,
                                 ids_to_sentence(single_final_seq, vocab))
+                tf.logging.info("Styled %d of %d: %s", 
+                                i * model.config.batch_size + b,
+                                model.config.batch_size * num_eval_batches,
+                                ids_to_sentence(single_style_seq, vocab))
                 unique_image_ids.add(single_image_id)
                 
     # Output a comparison file between generated and ground truth.
     with open(
-            os.path.join(FLAGS.eval_dir, "comparison." + str(time_now) + ".json"), 
+            os.path.join(FLAGS.eval_dir, "style.comparison." + str(time_now) + ".json"), 
             "w") as f:
         json.dump(comparison_dump, f)
     
@@ -269,10 +286,11 @@ def run():
         model_config.input_file_pattern = FLAGS.input_file_pattern
         model_config.wikipedia_file_pattern = FLAGS.wikipedia_file_pattern
         model = show_and_tell_model.ShowAndTellModel(model_config, mode="eval")
+        model.use_style = True
         model.build()
 
         # Create the Saver to restore model Variables.
-        saver = tf.train.Saver()
+        saver = tf.train.Saver(var_list=model.model_variables)
 
         # Create the summary operation and the summary writer.
         summary_op = tf.summary.merge_all()

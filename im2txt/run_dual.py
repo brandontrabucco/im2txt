@@ -27,6 +27,11 @@ import tensorflow as tf
 
 from im2txt import configuration
 from im2txt import show_and_tell_model
+
+
+from attrigram import run_attributes
+
+
 import glove
 
 FLAGS = tf.flags.FLAGS
@@ -34,29 +39,29 @@ FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_string("checkpoint_path", "",
                        "Model checkpoint file or directory containing a "
                        "model checkpoint file.")
+tf.flags.DEFINE_string("attrigram_checkpoint_path", "",
+                       "Model checkpoint file or directory containing a "
+                       "model checkpoint file.")
 tf.flags.DEFINE_string("input_files", "",
                        "File pattern or comma-separated list of file patterns "
                        "of image files.")
 
-tf.flags.DEFINE_float("start_amount", 500.0,
-                       "starting amount of heuristic temperature to use")
-tf.flags.DEFINE_float("finish_amount", 100.0,
-                       "final amount of heuristic temperature to use ")
-tf.flags.DEFINE_integer("divisions", 10,
+tf.flags.DEFINE_integer("divisions", 1000,
                        "Number of samles of the heuristic to take ")
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
 
-def run_caption(checkpoint_path, filenames, heuristic_amount):
+def run_caption(checkpoint_path, attrigram_checkpoint_path, filenames, divisions):
     g = tf.Graph()
     with g.as_default():
         # Build the model for evaluation.
         model_config = configuration.ModelConfig()
         model = show_and_tell_model.ShowAndTellModel(model_config, mode="inference")
+        model.use_style = True
         model.build()
         # Create the Saver to restore model Variables.
-        saver = tf.train.Saver()
+        saver = tf.train.Saver(var_list=model.model_variables)
         g.finalize()
 
     def _restore_fn(sess):
@@ -74,23 +79,48 @@ def run_caption(checkpoint_path, filenames, heuristic_amount):
     with tf.Session(graph=g) as sess:
         # Load the model from checkpoint.
         restore_fn(sess)
+        
+        # Run the attribute probabilities
+        ps = run_attributes.run_attributes(
+            attrigram_checkpoint_path, 
+            filenames,
+            divisions)
 
         # Prepare the list of image bytes for evaluation.
         images = []
         for filename in filenames:
             with tf.gfile.GFile(filename, "rb") as f:
                 images.append(f.read())
-        captions = [sess.run(model.final_seqs, 
-            feed_dict={"image_feed:0": img, model.heuristic_temperature: heuristic_amount}) for img in images]
+        
+        captions = []
+        for img, p in zip(images, ps):
+            input_feed = {"image_feed:0": img,
+                model.attribute_probabilities: [p["probabilities"]]}
+            sess.run(model.assign_initial_states, 
+                feed_dict=input_feed)
+            
+            # The original caption
+            img_progress = [sess.run(model.style_seqs, 
+                feed_dict=input_feed)]
+            
+            # Perform style transfer
+            for x in range(10):
+                sess.run(model.descend_style, 
+                    feed_dict=input_feed)
+                caption = sess.run(model.style_seqs, 
+                    feed_dict=input_feed)
+                img_progress.append(caption)
+            captions.append(img_progress)
 
         for i, caption in enumerate(captions):
             run_results.append({"filename": filenames[i], "captions": []})
-            for j in range(caption.shape[1]):
-                # Ignore begin and end words.
-                c = caption[0, j, :].tolist()
-                sentence = [vocab.id_to_word(w) for w in c[:-1]]
-                sentence = " ".join(sentence)
-                run_results[i]["captions"].append(sentence)
+            for flow in caption:
+                for j in range(flow.shape[0]):
+                    # Ignore begin and end words.
+                    c = flow[j, 0, :].tolist()
+                    sentence = [vocab.id_to_word(w) for w in c[:-1]]
+                    sentence = " ".join(sentence)
+                    run_results[i]["captions"].append(sentence)
                 
     return run_results
 
@@ -102,6 +132,13 @@ def main(_):
             raise ValueError("No checkpoint file found in: %s" % FLAGS.checkpoint_path)
     else:
         checkpoint_path = FLAGS.checkpoint_path
+        
+    if tf.gfile.IsDirectory(FLAGS.attrigram_checkpoint_path):
+        attrigram_checkpoint_path = tf.train.latest_checkpoint(FLAGS.attrigram_checkpoint_path)
+        if not checkpoint_path:
+            raise ValueError("No checkpoint file found in: %s" % FLAGS.attrigram_checkpoint_path)
+    else:
+        attrigram_checkpoint_path = FLAGS.attrigram_checkpoint_path
 
     filenames = []
     for file_pattern in FLAGS.input_files.split(","):
@@ -109,13 +146,13 @@ def main(_):
     tf.logging.info("Running caption generation on %d files matching %s",
                   len(filenames), FLAGS.input_files)
                 
-    zero_caption = run_caption(checkpoint_path, filenames, 0.0)
+    zero_caption = run_caption(checkpoint_path, attrigram_checkpoint_path, filenames, FLAGS.divisions)
     for single_image in zero_caption:
         print("Captions for image %s:" % os.path.basename(single_image["filename"]))
         for j, caption in enumerate(single_image["captions"]):
             print("  %d) %s " % (j, caption))
             
-    with open("captions.json", "w") as f:
+    with open("captions_styled.json", "w") as f:
         json.dump(zero_caption, f)
 
 if __name__ == "__main__":

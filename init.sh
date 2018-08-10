@@ -7,4 +7,4 @@ python $SCRATCH/research/repos/im2txt/im2txt/train.py \
 --inception_checkpoint_file="$SCRATCH/research/ckpts/inception/inception_v3.ckpt" \
 --train_dir="$SCRATCH/research/ckpts/im2txt/train/" \
 --train_inception=false \
---number_of_steps=50000 \
+--number_of_steps=100000 \
